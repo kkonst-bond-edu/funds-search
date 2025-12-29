@@ -1,23 +1,35 @@
-from transformers import pipeline
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-
-generator = pipeline('text-generation', model='gpt2')
+from typing import Optional
 
 app = FastAPI()
 
 
-class Body(BaseModel):
-    text: str
+class SearchRequest(BaseModel):
+    query: str
+    location: Optional[str] = None
+    role: Optional[str] = None
+    remote: Optional[bool] = None
 
 
-@app.get('/')
-def root():
-    return HTMLResponse("<h1>A self-documenting API to interact with a GPT2 model and generate text</h1>")
+@app.get('/health')
+def health():
+    return {"status": "ok"}
 
 
-@app.post('/generate')
-def predict(body: Body):
-    results = generator(body.text, max_length=35, num_return_sequences=1)
-    return results[0]
+@app.post('/search')
+def search(request: SearchRequest):
+    """
+    Search for job openings at VC funds.
+    
+    Accepts a JSON payload with:
+    - query: search query string
+    - location: optional location filter
+    - role: optional role/job title filter
+    - remote: optional boolean for remote positions
+    """
+    # Stub response for now
+    return {
+        "items": [],
+        "note": "stub - wiring only"
+    }
