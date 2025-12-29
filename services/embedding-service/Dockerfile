@@ -9,17 +9,20 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy requirements first for better caching
+# Copy requirements from project root
 COPY requirements.txt /app/requirements.txt
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY apps/ /app/apps/
-COPY services/ /app/services/
-COPY shared/ /app/shared/
+# Copy service code
+COPY services/embedding-service/ /app/services/embedding-service/
 
-# Default command (can be overridden in docker-compose)
-ENTRYPOINT [ "uvicorn" ]
-CMD [ "--host", "0.0.0.0", "apps.api.main:app" ]
+# Set Python path
+ENV PYTHONPATH=/app
+
+# Expose port
+EXPOSE 8001
+
+# Run the service
+CMD ["uvicorn", "services.embedding-service.main:app", "--host", "0.0.0.0", "--port", "8001"]

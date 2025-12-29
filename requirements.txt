@@ -1,2 +1,27 @@
-fastapi==0.78.0
-uvicorn[standard]
+# FastAPI and web server
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+httpx==0.25.2
+
+# LangChain and LangGraph
+langchain==0.1.0
+langchain-google-genai==0.0.6
+langgraph==0.0.26
+
+# Embedding model
+torch==2.1.0
+transformers==4.35.2
+sentencepiece==0.1.99
+
+# Document processing
+docling==1.0.0
+
+# Vector database
+pinecone-client==3.0.0
+
+# Data validation
+pydantic==2.5.0
+
+# Utilities
+python-dotenv==1.0.0
+numpy==1.24.3

@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - EMBEDDING_SERVICE_URL=http://embedding-service:8001
+    depends_on:
+      - embedding-service
+    volumes:
+      - ./apps:/app/apps
+      - ./shared:/app/shared
+
+  embedding-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn services.embedding-service.main:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    environment:
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}
+    volumes:
+      - ./services:/app/services
+      - ./shared:/app/shared
+    # Uncomment if using GPU
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  cv-processor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn services.cv-processor.main:app --host 0.0.0.0 --port 8002
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./services:/app/services
+      - ./shared:/app/shared
+
+  vc-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn services.vc-worker.main:app --host 0.0.0.0 --port 8003
+    ports:
+      - "8003:8003"
+    volumes:
+      - ./services:/app/services
+      - ./shared:/app/shared
+
