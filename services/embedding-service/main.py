@@ -96,7 +96,6 @@ def generate_embeddings(texts: List[str]) -> List[List[float]]:
         embeddings = model_output.last_hidden_state[:, 0, :].cpu().numpy()
     
     # Normalize embeddings for cosine similarity
-    import numpy as np
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
     embeddings = embeddings / (norms + 1e-8)
     
@@ -132,5 +131,5 @@ async def embed(request: EmbeddingRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 
