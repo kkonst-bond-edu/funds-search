@@ -1,0 +1,2 @@
+"""VC worker module."""
+
