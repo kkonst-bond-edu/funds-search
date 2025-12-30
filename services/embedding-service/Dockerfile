@@ -1,10 +1,10 @@
 FROM python:3.10-slim
 
-# Установка системных зависимостей для sentencepiece и numpy
 RUN apt-get update && apt-get install -y build-essential curl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY services/embedding-service/requirements.txt /app/requirements.txt
+# Копируем только requirements для кеширования слоев
+COPY services/embedding-service/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Предзагрузка модели
@@ -13,4 +13,5 @@ RUN python -c "from transformers import AutoTokenizer, AutoModel; AutoTokenizer.
 COPY . .
 
 EXPOSE 8000
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Исправленный путь к приложению
+CMD ["uvicorn", "services.embedding-service.main:app", "--host", "0.0.0.0", "--port", "8000"]
