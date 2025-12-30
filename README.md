@@ -13,6 +13,91 @@ This is a monorepo structure implementing a Multi-Agent RAG (Retrieval-Augmented
 - **VC Worker** (`services/vc-worker`): Web scraper and job posting parser
 - **Shared** (`shared`): Common schemas and utilities (Pinecone client)
 
+### System Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Client Layer"
+        User[User/Client]
+    end
+    
+    subgraph "API Layer"
+        API[FastAPI<br/>Port 8000]
+    end
+    
+    subgraph "Orchestration Layer"
+        Orchestrator[LangGraph Orchestrator]
+        RetrievalNode[Retrieval Node]
+        AnalysisNode[Analysis Node]
+    end
+    
+    subgraph "Services Layer"
+        EmbeddingService[Embedding Service<br/>BGE-M3 Model<br/>Port 8001]
+        CVProcessor[CV Processor<br/>Docling Parser<br/>Port 8002]
+        VCWorker[VC Worker<br/>Web Scraper<br/>Port 8003]
+    end
+    
+    subgraph "External Services"
+        Pinecone[(Pinecone<br/>Vector Database)]
+        Gemini[Google Gemini AI<br/>LLM]
+    end
+    
+    subgraph "Shared Components"
+        Schemas[Shared Schemas<br/>Pydantic Models]
+        PineconeClient[Pinecone Client]
+    end
+    
+    User -->|POST /search| API
+    API -->|Search Request| Orchestrator
+    
+    Orchestrator -->|1. Retrieval| RetrievalNode
+    RetrievalNode -->|Get Embedding| EmbeddingService
+    RetrievalNode -->|Vector Search| PineconeClient
+    PineconeClient -->|Query| Pinecone
+    Pinecone -->|Top 10 Matches| PineconeClient
+    PineconeClient -->|Job Results| RetrievalNode
+    
+    Orchestrator -->|2. Analysis| AnalysisNode
+    AnalysisNode -->|Analyze Matches| Gemini
+    Gemini -->|AI Reasoning| AnalysisNode
+    
+    AnalysisNode -->|Match Results| Orchestrator
+    Orchestrator -->|Results| API
+    API -->|JSON Response| User
+    
+    CVProcessor -.->|Future: Process CVs| EmbeddingService
+    VCWorker -.->|Future: Scrape Jobs| EmbeddingService
+    
+    Schemas -.->|Used by| API
+    Schemas -.->|Used by| Orchestrator
+    Schemas -.->|Used by| EmbeddingService
+    
+    style User fill:#e1f5ff
+    style API fill:#c8e6c9
+    style Orchestrator fill:#fff9c4
+    style RetrievalNode fill:#fff9c4
+    style AnalysisNode fill:#fff9c4
+    style EmbeddingService fill:#f3e5f5
+    style CVProcessor fill:#f3e5f5
+    style VCWorker fill:#f3e5f5
+    style Pinecone fill:#ffccbc
+    style Gemini fill:#ffccbc
+```
+
+### Data Flow
+
+1. **Search Request**: User sends a search query to the API endpoint (`POST /search`)
+2. **Orchestration**: API forwards the request to the LangGraph Orchestrator
+3. **Retrieval Node**:
+   - Calls Embedding Service to generate query embedding using BGE-M3 model
+   - Searches Pinecone vector database for top 10 similar job postings
+   - Applies optional filters (location, remote, etc.)
+4. **Analysis Node**:
+   - For each retrieved job, sends context to Google Gemini AI
+   - Gemini generates detailed reasoning about match quality
+   - Combines similarity scores with AI-generated explanations
+5. **Response**: Returns ranked list of `MatchResult` objects with scores and reasoning
+
 ## Tech Stack
 
 - **Python**: 3.10+
