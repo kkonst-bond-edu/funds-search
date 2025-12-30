@@ -70,8 +70,8 @@ def client():
 def mock_model_and_tokenizer():
     """Fixture to mock model and tokenizer globally."""
     with (
-        patch.object(embedding_main, "model") ,
-        patch.object(embedding_main, "tokenizer") ,
+        patch.object(embedding_main, "model"),
+        patch.object(embedding_main, "tokenizer"),
     ):
         # Setup mock model
         mock_model_instance = MagicMock()
