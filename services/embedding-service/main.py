@@ -2,6 +2,7 @@
 Embedding service using BAAI/bge-m3 model.
 Uses FastAPI with Lifespan pattern to load the model once.
 """
+import numpy as np
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
