@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - 'services/embedding-service/**'
-      - 'Dockerfile'
+      - 'services/embedding-service/Dockerfile'
       - '.github/workflows/deploy-embedding.yml'
   workflow_dispatch:
 
@@ -56,8 +56,7 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          docker build -f services/embedding-service/Dockerfile -t ${{ env.REGISTRY_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }} .
-
+          docker build -t ${{ env.REGISTRY_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }} .
           docker push ${{ env.REGISTRY_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker tag ${{ env.REGISTRY_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.REGISTRY_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
           docker push ${{ env.REGISTRY_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
