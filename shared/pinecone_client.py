@@ -4,25 +4,25 @@ Pinecone client for vector similarity search.
 import os
 from typing import List, Optional
 from pinecone import Pinecone, ServerlessSpec
-from shared.schemas import Job, Resume
+from shared.schemas import Resume
 
 
-class PineconeClient:
+class VectorStore:
     """Client for interacting with Pinecone vector database."""
     
-    def __init__(self, api_key: Optional[str] = None, index_name: str = "funds-search"):
+    def __init__(self, api_key: Optional[str] = None, index_name: Optional[str] = None):
         """
         Initialize Pinecone client.
         
         Args:
             api_key: Pinecone API key (defaults to PINECONE_API_KEY env var)
-            index_name: Name of the Pinecone index
+            index_name: Name of the Pinecone index (defaults to PINECONE_INDEX_NAME env var)
         """
         self.api_key = api_key or os.getenv("PINECONE_API_KEY")
         if not self.api_key:
             raise ValueError("PINECONE_API_KEY environment variable is required")
         
-        self.index_name = index_name
+        self.index_name = index_name or os.getenv("PINECONE_INDEX_NAME", "funds-search")
         self.pc = Pinecone(api_key=self.api_key)
         self.index = None
         self._ensure_index()
@@ -43,65 +43,48 @@ class PineconeClient:
         
         self.index = self.pc.Index(self.index_name)
     
-    def upsert_job(self, job: Job, vector: List[float]) -> None:
+    def upsert_resume(self, resume: Resume) -> None:
         """
-        Upsert a job with its embedding vector.
+        Upsert a resume with its chunks into Pinecone.
+        Each chunk is stored as a separate vector.
         
         Args:
-            job: Job object
-            vector: Embedding vector
+            resume: Resume object with chunks
         """
-        metadata = {
-            "url": job.url,
-            "company": job.company,
-            "text": job.text[:1000],  # Limit metadata size
-            "title": job.title or "",
-            "location": job.location or "",
-            "remote": job.remote or False,
-        }
+        if not resume.chunks:
+            raise ValueError("Resume must have at least one chunk")
         
-        self.index.upsert(
-            vectors=[{
-                "id": f"job_{hash(job.url)}",
-                "values": vector,
+        vectors = []
+        for idx, chunk in enumerate(resume.chunks):
+            metadata = {
+                "resume_id": resume.id,
+                "user_id": resume.user_id,
+                "chunk_index": idx,
+                "text": chunk.text[:1000],  # Limit metadata size
+                "type": "resume",
+                **chunk.metadata  # Include any additional chunk metadata
+            }
+            
+            vectors.append({
+                "id": f"resume_{resume.id}_chunk_{idx}",
+                "values": chunk.embedding,
                 "metadata": metadata
-            }]
-        )
-    
-    def upsert_resume(self, resume: Resume, vector: List[float]) -> None:
-        """
-        Upsert a resume with its embedding vector.
+            })
         
-        Args:
-            resume: Resume object
-            vector: Embedding vector
-        """
-        metadata = {
-            "user_id": resume.user_id,
-            "text": resume.text[:1000],  # Limit metadata size
-        }
-        
-        self.index.upsert(
-            vectors=[{
-                "id": f"resume_{resume.user_id}",
-                "values": vector,
-                "metadata": metadata
-            }]
-        )
+        # Batch upsert all chunks
+        self.index.upsert(vectors=vectors)
     
-    def search_similar(
+    def search_similar_resumes(
         self,
         query_vector: List[float],
-        top_k: int = 10,
-        filter_dict: Optional[dict] = None
+        top_k: int = 10
     ) -> List[dict]:
         """
-        Search for similar vectors using cosine similarity.
+        Search for similar resume chunks using cosine similarity.
         
         Args:
             query_vector: Query embedding vector
-            top_k: Number of results to return
-            filter_dict: Optional metadata filter
+            top_k: Number of results to return (default: 10)
             
         Returns:
             List of search results with metadata and scores
@@ -110,7 +93,7 @@ class PineconeClient:
             vector=query_vector,
             top_k=top_k,
             include_metadata=True,
-            filter=filter_dict
+            filter={"type": "resume"}  # Only search resume chunks
         )
         
         return [

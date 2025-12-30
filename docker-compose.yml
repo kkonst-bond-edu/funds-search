@@ -41,10 +41,16 @@ services:
   cv-processor:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: services/cv-processor/Dockerfile
     command: uvicorn services.cv-processor.main:app --host 0.0.0.0 --port 8002
     ports:
       - "8002:8002"
+    environment:
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME:-funds-search}
+      - EMBEDDING_SERVICE_URL=http://embedding-service:8001
+    depends_on:
+      - embedding-service
     volumes:
       - ./services:/app/services
       - ./shared:/app/shared

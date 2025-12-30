@@ -2,17 +2,25 @@
 Shared Pydantic schemas for the funds-search system.
 """
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
+
+
+class DocumentChunk(BaseModel):
+    """Document chunk schema for semantic chunks."""
+    text: str = Field(..., description="Chunk text content")
+    metadata: Dict = Field(default_factory=dict, description="Chunk metadata")
+    embedding: List[float] = Field(..., description="Embedding vector for the chunk")
 
 
 class Job(BaseModel):
     """Job opening schema."""
-    url: str = Field(..., description="URL of the job posting")
+    id: str = Field(..., description="Unique identifier for the job")
     company: str = Field(..., description="Company name")
-    text: str = Field(..., description="Full text content of the job posting")
-    vector: Optional[List[float]] = Field(None, description="Embedding vector for similarity search")
     title: Optional[str] = Field(None, description="Job title")
+    raw_text: str = Field(..., description="Full text content of the job posting")
+    vector: Optional[List[float]] = Field(None, description="Embedding vector for similarity search")
+    url: Optional[str] = Field(None, description="URL of the job posting")
     location: Optional[str] = Field(None, description="Job location")
     remote: Optional[bool] = Field(None, description="Whether the position is remote")
     created_at: Optional[datetime] = Field(default_factory=datetime.now, description="Creation timestamp")
@@ -20,9 +28,11 @@ class Job(BaseModel):
 
 class Resume(BaseModel):
     """Resume/CV schema."""
+    id: str = Field(..., description="Unique identifier for the resume")
     user_id: str = Field(..., description="Unique identifier for the user")
-    text: str = Field(..., description="Full text content of the resume")
-    vector: Optional[List[float]] = Field(None, description="Embedding vector for similarity search")
+    raw_text: str = Field(..., description="Full text content of the resume")
+    chunks: List[DocumentChunk] = Field(default_factory=list, description="List of document chunks")
+    processed_at: Optional[datetime] = Field(default_factory=datetime.now, description="Processing timestamp")
     created_at: Optional[datetime] = Field(default_factory=datetime.now, description="Creation timestamp")
 
 
