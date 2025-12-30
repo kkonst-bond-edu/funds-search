@@ -203,16 +203,29 @@ graph TB
 ### CV Processor (Port 8002)
 
 - `GET /health` - Health check endpoint
-- `POST /process` - Process CV/resume file (PDF or DOCX)
+- `POST /process-cv` - Process CV/resume file (PDF or DOCX)
+  - Request: `user_id` (query parameter) and `file` (multipart/form-data)
+  - Response: `{"status": "success", "resume_id": "uuid", "chunks_processed": 5}`
+  
+See [CV Processor README](services/cv-processor/README.md) for detailed documentation.
 
 ### VC Worker (Port 8003)
 
 - `GET /health` - Health check endpoint
 - `POST /scrape` - Scrape and parse job posting from URL
 
+## Services Documentation
+
+Each service has its own detailed README:
+
+- **[Embedding Service](services/embedding-service/README.md)**: BGE-M3 embedding model service
+- **[CV Processor](services/cv-processor/README.md)**: Docling-based CV/resume parser and ingestion pipeline
+
 ## Embedding Service
 
 The Embedding Service is a critical component of the funds-search system that provides semantic text embeddings using the BAAI/bge-m3 model. It converts text queries and documents into high-dimensional vector representations that enable semantic similarity search in the vector database.
+
+> 📖 **For detailed documentation, see [Embedding Service README](services/embedding-service/README.md)**
 
 ### Overview
 
@@ -474,6 +487,23 @@ Key dependencies (see `services/embedding-service/requirements.txt`):
 - `numpy>=1.26.4`: Numerical operations
 - `pydantic>=2.10.6`: Request/response validation
 
+## CV Processor Service
+
+The CV Processor is a FastAPI microservice that handles the data ingestion pipeline for resumes. It processes PDF and DOCX files, extracts text, generates embeddings, and stores them in Pinecone.
+
+### Features
+
+- **Document Processing**: Converts PDF/DOCX to Markdown using IBM's Docling
+- **Text Chunking**: Splits documents into semantic chunks (1000 chars, 800 overlap)
+- **Embedding Generation**: Calls embedding-service to generate 1024-dim vectors
+- **Vector Storage**: Stores processed resumes in Pinecone with metadata
+
+### Status
+
+✅ **Stage 1 Complete**: CV ingestion pipeline is fully functional
+
+> 📖 **For detailed documentation, see [CV Processor README](services/cv-processor/README.md)**
+
 ## Project Structure
 
 ```
@@ -487,11 +517,18 @@ Key dependencies (see `services/embedding-service/requirements.txt`):
 │       └── graph.py
 ├── services/
 │   ├── cv-processor/             # Docling CV processing
-│   │   └── main.py
+│   │   ├── main.py
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   └── README.md
 │   ├── vc-worker/                # Web scraper + Docling
 │   │   └── main.py
 │   └── embedding-service/        # BGE-M3 Service
-│       └── main.py
+│       ├── main.py
+│       ├── Dockerfile
+│       ├── requirements.txt
+│       ├── tests/
+│       └── README.md
 ├── shared/
 │   ├── schemas.py                # Pydantic models
 │   └── pinecone_client.py        # Vector DB client
@@ -503,11 +540,42 @@ Key dependencies (see `services/embedding-service/requirements.txt`):
 
 ## How It Works
 
+### Search Flow
+
 1. **Search Request**: User sends a search query to the API
 2. **Orchestrator**: LangGraph state machine coordinates the process:
    - **Retrieval Node**: Generates query embedding using BGE-M3, searches Pinecone for top 10 matches
    - **Analysis Node**: Gemini AI agent analyzes each match and generates reasoning
 3. **Response**: Returns ranked results with similarity scores and AI-generated explanations
+
+### CV Ingestion Flow (Stage 1 - Complete)
+
+1. **File Upload**: User uploads PDF/DOCX CV via CV Processor API
+2. **Document Processing**: Docling converts file to Markdown
+3. **Text Chunking**: Document is split into semantic chunks
+4. **Embedding Generation**: Each chunk is sent to Embedding Service for vectorization
+5. **Storage**: Chunks with embeddings are stored in Pinecone vector database
+6. **Response**: Returns resume_id and number of chunks processed
+
+## Current Status
+
+### ✅ Stage 1: Data Ingestion (Complete)
+
+- **CV Processor**: Fully functional, processes PDF/DOCX files
+- **Embedding Service**: Production-ready, serves BGE-M3 model
+- **Pinecone Integration**: Stores CV chunks with embeddings
+- **Documentation**: Complete READMEs for all services
+
+### 🚧 Stage 2: Search & Matching (In Progress)
+
+- **Orchestrator**: LangGraph state machine for search coordination
+- **API**: FastAPI endpoints for search requests
+- **Analysis**: Gemini AI for match reasoning
+
+### 📋 Stage 3: Job Scraping (Planned)
+
+- **VC Worker**: Web scraper for job postings
+- **Job Processing**: Similar pipeline to CV processing
 
 ## CI/CD
 
