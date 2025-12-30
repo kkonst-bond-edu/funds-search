@@ -126,7 +126,9 @@ async def embed(request: EmbeddingRequest) -> EmbeddingResponse:
         embeddings = generate_embeddings(request.texts)
         return EmbeddingResponse(embeddings=embeddings)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating embeddings: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error generating embeddings: {str(e)}"
+        ) from e from e
 
 
 if __name__ == "__main__":

@@ -217,7 +217,7 @@ class TestRequestResponseSchemas:
         assert len(request.texts) == 2
 
         # Invalid request (should raise validation error)
-        with pytest.raises(Exception):  # Pydantic validation error
+        with pytest.raises(ValueError):  # Pydantic validation error
             EmbeddingRequest(texts="not a list")
 
     def test_embed_response_schema(self):
@@ -228,5 +228,5 @@ class TestRequestResponseSchemas:
         assert len(response.embeddings) == 2
 
         # Invalid response (should raise validation error)
-        with pytest.raises(Exception):  # Pydantic validation error
+        with pytest.raises(ValueError):  # Pydantic validation error
             EmbeddingResponse(embeddings="not a list")
