@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y build-essential curl && rm -rf /var/lib
 
 WORKDIR /app
 # Копируем только requirements для кеширования слоев
-COPY services/embedding-service/requirements.txt .
+COPY services/embedding-service/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Предзагрузка модели
