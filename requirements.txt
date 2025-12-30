@@ -9,7 +9,7 @@ langchain-google-genai==0.0.6
 langgraph==0.0.26
 
 # Embedding model
-torch==2.1.0
+torch==2.2.2
 transformers==4.35.2
 sentencepiece==0.1.99
 
