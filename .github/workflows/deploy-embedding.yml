@@ -41,7 +41,7 @@ jobs:
           test -n "${{ secrets.AZURE_CLIENT_SECRET }}" && echo "AZURE_CLIENT_SECRET: OK" || (echo "AZURE_CLIENT_SECRET: EMPTY" && exit 1)
 
       - name: Log in to Azure
-        uses: azure/login@v1
+        uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
