@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   api:
     build:
@@ -42,18 +40,14 @@ services:
     build:
       context: .
       dockerfile: services/cv-processor/Dockerfile
-    command: uvicorn services.cv-processor.main:app --host 0.0.0.0 --port 8002
     ports:
-      - "8002:8002"
+      - "8002:8001"
+    env_file:
+      - .env  # Это заставит Docker Compose принудительно читать ваш файл
     environment:
       - PINECONE_API_KEY=${PINECONE_API_KEY}
-      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME:-funds-search}
-      - EMBEDDING_SERVICE_URL=http://embedding-service:8001
-    depends_on:
-      - embedding-service
-    volumes:
-      - ./services:/app/services
-      - ./shared:/app/shared
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME}
+      - EMBEDDING_SERVICE_URL=${EMBEDDING_SERVICE_URL}
 
   vc-worker:
     build:

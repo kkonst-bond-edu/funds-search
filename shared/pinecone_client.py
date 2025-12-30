@@ -1,107 +1,37 @@
-"""
-Pinecone client for vector similarity search.
-"""
 import os
-from typing import List, Optional
-from pinecone import Pinecone, ServerlessSpec
-from shared.schemas import Resume
-
+from typing import List
+from pinecone import Pinecone
+from shared.schemas import Resume, DocumentChunk
 
 class VectorStore:
-    """Client for interacting with Pinecone vector database."""
-    
-    def __init__(self, api_key: Optional[str] = None, index_name: Optional[str] = None):
-        """
-        Initialize Pinecone client.
-        
-        Args:
-            api_key: Pinecone API key (defaults to PINECONE_API_KEY env var)
-            index_name: Name of the Pinecone index (defaults to PINECONE_INDEX_NAME env var)
-        """
-        self.api_key = api_key or os.getenv("PINECONE_API_KEY")
-        if not self.api_key:
-            raise ValueError("PINECONE_API_KEY environment variable is required")
-        
-        self.index_name = index_name or os.getenv("PINECONE_INDEX_NAME", "funds-search")
-        self.pc = Pinecone(api_key=self.api_key)
-        self.index = None
-        self._ensure_index()
-    
-    def _ensure_index(self):
-        """Ensure the index exists, create if it doesn't."""
-        if self.index_name not in [idx.name for idx in self.pc.list_indexes()]:
-            # Create index with 1024 dimensions (BGE-M3 output dimension)
-            self.pc.create_index(
-                name=self.index_name,
-                dimension=1024,
-                metric="cosine",
-                spec=ServerlessSpec(
-                    cloud="aws",
-                    region="us-east-1"
-                )
-            )
-        
+    def __init__(self):
+        self.pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+        self.index_name = os.getenv("PINECONE_INDEX_NAME")
         self.index = self.pc.Index(self.index_name)
-    
-    def upsert_resume(self, resume: Resume) -> None:
-        """
-        Upsert a resume with its chunks into Pinecone.
-        Each chunk is stored as a separate vector.
-        
-        Args:
-            resume: Resume object with chunks
-        """
-        if not resume.chunks:
-            raise ValueError("Resume must have at least one chunk")
-        
+
+    def upsert_resume(self, resume: Resume):
+        """Сохраняет все чанки резюме в Pinecone."""
         vectors = []
-        for idx, chunk in enumerate(resume.chunks):
-            metadata = {
-                "resume_id": resume.id,
-                "user_id": resume.user_id,
-                "chunk_index": idx,
-                "text": chunk.text[:1000],  # Limit metadata size
-                "type": "resume",
-                **chunk.metadata  # Include any additional chunk metadata
-            }
-            
+        for i, chunk in enumerate(resume.chunks):
             vectors.append({
-                "id": f"resume_{resume.id}_chunk_{idx}",
+                "id": f"{resume.user_id}_{resume.id}_chunk_{i}",
                 "values": chunk.embedding,
-                "metadata": metadata
+                "metadata": {
+                    "user_id": resume.user_id,
+                    "resume_id": resume.id,
+                    "text": chunk.text,
+                    **chunk.metadata
+                }
             })
         
-        # Batch upsert all chunks
-        self.index.upsert(vectors=vectors)
-    
-    def search_similar_resumes(
-        self,
-        query_vector: List[float],
-        top_k: int = 10
-    ) -> List[dict]:
-        """
-        Search for similar resume chunks using cosine similarity.
-        
-        Args:
-            query_vector: Query embedding vector
-            top_k: Number of results to return (default: 10)
-            
-        Returns:
-            List of search results with metadata and scores
-        """
-        results = self.index.query(
+        # Pinecone рекомендует загружать пачками (batching)
+        self.index.upsert(vectors=vectors, namespace="resumes")
+
+    def search_similar(self, query_vector: List[float], top_k: int = 5):
+        """Поиск похожих документов."""
+        return self.index.query(
             vector=query_vector,
             top_k=top_k,
             include_metadata=True,
-            filter={"type": "resume"}  # Only search resume chunks
+            namespace="resumes"
         )
-        
-        return [
-            {
-                "id": match.id,
-                "score": match.score,
-                "metadata": match.metadata
-            }
-            for match in results.matches
-        ]
-
