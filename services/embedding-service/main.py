@@ -4,21 +4,21 @@ Uses FastAPI with Lifespan pattern to load the model once.
 """
 import numpy as np
 from contextlib import asynccontextmanager
+from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List
 import torch
 from transformers import AutoTokenizer, AutoModel
 import os
 
 
 # Global model and tokenizer
-model = None
-tokenizer = None
+model: Optional[AutoModel] = None
+tokenizer: Optional[AutoTokenizer] = None
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> Any:
     """Lifespan context manager to load model on startup."""
     global model, tokenizer
     
@@ -104,7 +104,7 @@ def generate_embeddings(texts: List[str]) -> List[List[float]]:
 
 
 @app.get("/health")
-async def health():
+async def health() -> Dict[str, Any]:
     """Health check endpoint."""
     return {
         "status": "ok",
@@ -113,7 +113,7 @@ async def health():
 
 
 @app.post("/embed", response_model=EmbeddingResponse)
-async def embed(request: EmbeddingRequest):
+async def embed(request: EmbeddingRequest) -> EmbeddingResponse:
     """
     Generate embeddings for the provided texts.
     

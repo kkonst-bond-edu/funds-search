@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Testing
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Linting and formatting
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Documentation
+*.md
+docs/
+
+# CI/CD
+.github/
+.git/
+.gitignore
+
+# Other
+*.log
+.DS_Store
+

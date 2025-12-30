@@ -33,6 +33,22 @@ jobs:
         with:
           python-version: '3.10'
 
+      - name: Install dependencies
+        run: |
+          cd services/embedding-service
+          pip install -r requirements.txt
+
+      - name: Lint code
+        run: |
+          cd services/embedding-service
+          black --check .
+          ruff check .
+
+      - name: Run tests
+        run: |
+          cd services/embedding-service
+          pytest
+
       - name: Sanity check Azure secrets (no values printed)
         run: |
           test -n "${{ secrets.AZURE_CLIENT_ID }}" && echo "AZURE_CLIENT_ID: OK" || (echo "AZURE_CLIENT_ID: EMPTY" && exit 1)
