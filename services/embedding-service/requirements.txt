@@ -1,16 +1,9 @@
-# FastAPI and web server
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-httpx==0.25.2
-
-# Embedding model dependencies
-torch>=2.2.0
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+pydantic>=2.10.6
+numpy>=1.26.4
 transformers>=4.44.0
-sentencepiece==0.1.99
-
-# Data validation
-pydantic==2.10.6
-
-# Utilities
-numpy==1.26.4
-
+sentencepiece
+# Используем EXTRA-index-url, чтобы не отключать основной PyPI
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.2.0

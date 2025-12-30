@@ -4,23 +4,16 @@ RUN apt-get update && apt-get install -y build-essential curl && rm -rf /var/lib
 
 WORKDIR /app
 
-# 1. Копируем requirements ИМЕННО из папки сервиса
-# Мы сейчас находимся в корне проекта (контекст сборки)
-COPY services/embedding-service/requirements.txt ./requirements.txt
+# 1. Копируем файл зависимостей
+COPY services/embedding-service/requirements.txt .
 
-# Устанавливаем легкий torch для CPU (чтобы билд не падал по памяти)
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
-    fastapi==0.104.1 \
-    uvicorn[standard]==0.24.0 \
-    pydantic>=2.0.0 \
-    transformers>=4.44.0 \
-    torch \
-    sentencepiece
+# 2. Устанавливаем зависимости из файла (флаг --extra-index-url внутри файла сделает всё сам)
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 2. Предзагрузка модели
+# 3. Предзагрузка модели
 RUN python -c "from transformers import AutoTokenizer, AutoModel; AutoTokenizer.from_pretrained('BAAI/bge-m3'); AutoModel.from_pretrained('BAAI/bge-m3')"
 
-# 3. Копируем всё остальное
+# 4. Копируем код
 COPY . .
 
 EXPOSE 8000
