@@ -14,13 +14,26 @@ import torch
 import sys
 import importlib.util
 from pathlib import Path
+import os
 
-# Add workspace root to path for imports
-workspace_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(workspace_root))
+# Determine the main.py file location
+# When running from services/embedding-service/, main.py is in the parent of tests/
+test_file = Path(__file__).resolve()
+service_dir = test_file.parent.parent  # services/embedding-service/
+main_file = service_dir / "main.py"
+
+# If main.py not found, try workspace root approach
+if not main_file.exists():
+    # Calculate workspace root from test file location
+    # test_file is in: services/embedding-service/tests/test_main.py
+    workspace_root = test_file.parent.parent.parent.parent
+    main_file = workspace_root / "services" / "embedding-service" / "main.py"
+    sys.path.insert(0, str(workspace_root))
+else:
+    # Add service directory to path
+    sys.path.insert(0, str(service_dir))
 
 # Import using importlib to handle hyphenated module name
-main_file = workspace_root / "services" / "embedding-service" / "main.py"
 spec = importlib.util.spec_from_file_location(
     "embedding_service_main",
     main_file
