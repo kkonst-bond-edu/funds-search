@@ -122,6 +122,9 @@ async def embed(request: EmbeddingRequest) -> EmbeddingResponse:
     Returns:
         EmbeddingResponse with list of embedding vectors
     """
+    if not request.texts:
+        return EmbeddingResponse(embeddings=[])
+        
     try:
         embeddings = generate_embeddings(request.texts)
         return EmbeddingResponse(embeddings=embeddings)
