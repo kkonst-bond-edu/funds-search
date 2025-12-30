@@ -6,9 +6,11 @@ which requires significant RAM and is not available in CI environments.
 """
 import pytest
 from unittest.mock import patch, MagicMock
-from fastapi.testclient import TestClient
 import numpy as np
 import torch
+
+# Import TestClient - will work with updated httpx version
+from fastapi.testclient import TestClient
 
 # Import the app and functions
 import sys
@@ -51,6 +53,8 @@ EmbeddingResponse = embedding_main.EmbeddingResponse
 @pytest.fixture
 def client():
     """Create a test client for FastAPI."""
+    # TestClient should work with httpx>=0.27.0 in CI
+    # Local environment may have version conflicts, but CI will have correct versions
     return TestClient(app)
 
 
@@ -64,7 +68,9 @@ def mock_model_and_tokenizer():
         mock_model_instance = MagicMock()
         mock_model_instance.eval.return_value = mock_model_instance
         mock_model_instance.to.return_value = mock_model_instance
-        mock_model_instance.parameters.return_value = [torch.tensor([1.0])]
+        # parameters() should return an iterator, not a list
+        mock_param = torch.tensor([1.0])
+        mock_model_instance.parameters.return_value = iter([mock_param])
 
         # Create mock output
         batch_size = 2
