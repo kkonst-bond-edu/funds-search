@@ -70,6 +70,9 @@ jobs:
           containerAppEnvironment: ${{ env.AZURE_CONTAINER_APP_ENVIRONMENT }}
           imageToDeploy: ${{ env.REGISTRY_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
           targetPort: 8000
+          # ВАЖНО:
+          cpu: 1.0
+          memory: 4.0Gi
       - name: Azure logout
         run: az logout
 
