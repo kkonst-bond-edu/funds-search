@@ -4,18 +4,19 @@ Unit and integration tests for embedding-service.
 All tests use mocks to avoid loading the actual BGE-M3 model,
 which requires significant RAM and is not available in CI environments.
 """
-import pytest
-from unittest.mock import patch, MagicMock
-import numpy as np
 
-# Import TestClient - will work with updated httpx version
-from fastapi.testclient import TestClient
+import importlib.util
 
 # Import the app and functions
 import sys
-import importlib.util
 from pathlib import Path
-import os
+from unittest.mock import MagicMock, patch
+
+import numpy as np
+import pytest
+
+# Import TestClient - will work with updated httpx version
+from fastapi.testclient import TestClient
 
 # Mock transformers BEFORE importing main.py to avoid loading real models
 # This is critical for CI environments that don't have enough RAM
@@ -68,9 +69,10 @@ def client():
 @pytest.fixture
 def mock_model_and_tokenizer():
     """Fixture to mock model and tokenizer globally."""
-    with patch.object(embedding_main, "model") as mock_model, patch.object(
-        embedding_main, "tokenizer"
-    ) as mock_tokenizer:
+    with (
+        patch.object(embedding_main, "model") as mock_model,
+        patch.object(embedding_main, "tokenizer") as mock_tokenizer,
+    ):
         # Setup mock model
         mock_model_instance = MagicMock()
         mock_model_instance.eval.return_value = mock_model_instance

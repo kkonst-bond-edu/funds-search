@@ -2,19 +2,19 @@
 Embedding service using BAAI/bge-m3 model.
 Uses FastAPI with Lifespan pattern to load the model once.
 """
-import numpy as np
+
 from contextlib import asynccontextmanager
-from typing import List, Optional, Dict, Any
+from typing import Any
+
+import numpy as np
+import torch
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import torch
-from transformers import AutoTokenizer, AutoModel
-import os
-
+from transformers import AutoModel, AutoTokenizer
 
 # Global model and tokenizer
-model: Optional[AutoModel] = None
-tokenizer: Optional[AutoTokenizer] = None
+model: AutoModel | None = None
+tokenizer: AutoTokenizer | None = None
 
 
 @asynccontextmanager
@@ -54,16 +54,16 @@ app = FastAPI(
 class EmbeddingRequest(BaseModel):
     """Request model for embedding generation."""
 
-    texts: List[str]
+    texts: list[str]
 
 
 class EmbeddingResponse(BaseModel):
     """Response model with embeddings."""
 
-    embeddings: List[List[float]]
+    embeddings: list[list[float]]
 
 
-def generate_embeddings(texts: List[str]) -> List[List[float]]:
+def generate_embeddings(texts: list[str]) -> list[list[float]]:
     """
     Generate embeddings for a list of texts using BGE-M3.
 
@@ -106,7 +106,7 @@ def generate_embeddings(texts: List[str]) -> List[List[float]]:
 
 
 @app.get("/health")
-async def health() -> Dict[str, Any]:
+async def health() -> dict[str, Any]:
     """Health check endpoint."""
     return {"status": "ok", "model_loaded": model is not None}
 
