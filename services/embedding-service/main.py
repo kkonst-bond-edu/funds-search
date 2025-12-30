@@ -21,25 +21,25 @@ tokenizer: Optional[AutoTokenizer] = None
 async def lifespan(app: FastAPI) -> Any:
     """Lifespan context manager to load model on startup."""
     global model, tokenizer
-    
+
     print("Loading BGE-M3 model...")
     model_name = "BAAI/bge-m3"
-    
+
     # Load tokenizer and model
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModel.from_pretrained(model_name)
-    
+
     # Set to evaluation mode
     model.eval()
-    
+
     # Move to GPU if available
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
-    
+
     print(f"Model loaded on {device}")
-    
+
     yield
-    
+
     # Cleanup (if needed)
     print("Shutting down embedding service...")
 
@@ -47,79 +47,78 @@ async def lifespan(app: FastAPI) -> Any:
 app = FastAPI(
     title="Embedding Service",
     description="BGE-M3 embedding service for funds-search",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 
 class EmbeddingRequest(BaseModel):
     """Request model for embedding generation."""
+
     texts: List[str]
 
 
 class EmbeddingResponse(BaseModel):
     """Response model with embeddings."""
+
     embeddings: List[List[float]]
 
 
 def generate_embeddings(texts: List[str]) -> List[List[float]]:
     """
     Generate embeddings for a list of texts using BGE-M3.
-    
+
     Args:
         texts: List of text strings to embed
-        
+
     Returns:
         List of embedding vectors
     """
     global model, tokenizer
-    
+
     if model is None or tokenizer is None:
         raise RuntimeError("Model not loaded")
-    
+
     device = next(model.parameters()).device
-    
+
     # Tokenize inputs
     encoded_input = tokenizer(
         texts,
         padding=True,
         truncation=True,
         max_length=8192,  # BGE-M3 supports up to 8192 tokens
-        return_tensors="pt"
+        return_tensors="pt",
     )
-    
+
     # Move to device
     encoded_input = {k: v.to(device) for k, v in encoded_input.items()}
-    
+
     # Generate embeddings
     with torch.no_grad():
         model_output = model(**encoded_input)
         # Use dense embeddings (last_hidden_state)
         embeddings = model_output.last_hidden_state[:, 0, :].cpu().numpy()
-    
+
     # Normalize embeddings for cosine similarity
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
     embeddings = embeddings / (norms + 1e-8)
-    
+
     return embeddings.tolist()
 
 
 @app.get("/health")
 async def health() -> Dict[str, Any]:
     """Health check endpoint."""
-    return {
-        "status": "ok",
-        "model_loaded": model is not None
-    }
+    return {"status": "ok", "model_loaded": model is not None}
 
 
 @app.post("/embed", response_model=EmbeddingResponse)
 async def embed(request: EmbeddingRequest) -> EmbeddingResponse:
     """
     Generate embeddings for the provided texts.
-    
+
     Args:
         request: EmbeddingRequest with list of texts
-        
+
     Returns:
         EmbeddingResponse with list of embedding vectors
     """
@@ -132,5 +131,5 @@ async def embed(request: EmbeddingRequest) -> EmbeddingResponse:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
 
+    uvicorn.run(app, host="0.0.0.0", port=8000)

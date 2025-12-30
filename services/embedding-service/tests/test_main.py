@@ -34,10 +34,7 @@ else:
     sys.path.insert(0, str(service_dir))
 
 # Import using importlib to handle hyphenated module name
-spec = importlib.util.spec_from_file_location(
-    "embedding_service_main",
-    main_file
-)
+spec = importlib.util.spec_from_file_location("embedding_service_main", main_file)
 if spec is None or spec.loader is None:
     raise ImportError(f"Could not load module from {main_file}")
 embedding_main = importlib.util.module_from_spec(spec)
@@ -68,25 +65,25 @@ def mock_model_and_tokenizer():
         mock_model_instance.eval.return_value = mock_model_instance
         mock_model_instance.to.return_value = mock_model_instance
         mock_model_instance.parameters.return_value = [torch.tensor([1.0])]
-        
+
         # Create mock output
         batch_size = 2
         hidden_size = 1024
         mock_output = MagicMock()
         mock_output.last_hidden_state = torch.randn(batch_size, 1, hidden_size)
         mock_model_instance.return_value = mock_output
-        
+
         # Setup mock tokenizer
         mock_tokenizer_instance = MagicMock()
         mock_tokenizer_instance.return_value = {
             "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
             "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1]]),
         }
-        
+
         # Set the mocked instances
         embedding_main.model = mock_model_instance
         embedding_main.tokenizer = mock_tokenizer_instance
-        
+
         yield mock_model_instance, mock_tokenizer_instance
 
 
@@ -116,13 +113,10 @@ class TestEmbedEndpoint:
     def test_embed_endpoint_success(self, client, mock_model_and_tokenizer):
         """Test successful embedding generation."""
         mock_model, mock_tokenizer = mock_model_and_tokenizer
-        
+
         # Make request
-        response = client.post(
-            "/embed",
-            json={"texts": ["Hello world", "Test embedding"]}
-        )
-        
+        response = client.post("/embed", json={"texts": ["Hello world", "Test embedding"]})
+
         assert response.status_code == 200
         data = response.json()
         assert "embeddings" in data
@@ -153,11 +147,11 @@ class TestGenerateEmbeddings:
     def test_generate_embeddings_success(self, mock_model_and_tokenizer):
         """Test successful embedding generation."""
         mock_model, mock_tokenizer = mock_model_and_tokenizer
-        
+
         # Test function
         texts = ["Hello world", "Test embedding"]
         embeddings = generate_embeddings(texts)
-        
+
         assert len(embeddings) == 2
         assert len(embeddings[0]) == 1024
         assert len(embeddings[1]) == 1024
@@ -168,11 +162,11 @@ class TestGenerateEmbeddings:
         """Test that generate_embeddings raises error when model is not loaded."""
         original_model = embedding_main.model
         original_tokenizer = embedding_main.tokenizer
-        
+
         try:
             embedding_main.model = None
             embedding_main.tokenizer = None
-            
+
             with pytest.raises(RuntimeError, match="Model not loaded"):
                 generate_embeddings(["test"])
         finally:
@@ -182,18 +176,18 @@ class TestGenerateEmbeddings:
     def test_generate_embeddings_normalization(self, mock_model_and_tokenizer):
         """Test that embeddings are normalized."""
         mock_model, mock_tokenizer = mock_model_and_tokenizer
-        
+
         # Override mock output with known values for normalization test
         batch_size = 1
         hidden_size = 3
         mock_output = MagicMock()
         mock_output.last_hidden_state = torch.tensor([[[3.0, 4.0, 0.0]]])
         mock_model.return_value = mock_output
-        
+
         # Test function
         texts = ["test"]
         embeddings = generate_embeddings(texts)
-        
+
         # Check normalization (should have norm ~1.0)
         embedding = np.array(embeddings[0])
         norm = np.linalg.norm(embedding)
@@ -208,7 +202,7 @@ class TestRequestResponseSchemas:
         # Valid request
         request = EmbeddingRequest(texts=["test1", "test2"])
         assert len(request.texts) == 2
-        
+
         # Invalid request (should raise validation error)
         with pytest.raises(Exception):  # Pydantic validation error
             EmbeddingRequest(texts="not a list")
@@ -219,7 +213,7 @@ class TestRequestResponseSchemas:
         embeddings = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
         response = EmbeddingResponse(embeddings=embeddings)
         assert len(response.embeddings) == 2
-        
+
         # Invalid response (should raise validation error)
         with pytest.raises(Exception):  # Pydantic validation error
             EmbeddingResponse(embeddings="not a list")
