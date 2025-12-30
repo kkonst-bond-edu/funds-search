@@ -10,7 +10,7 @@ langgraph==0.0.26
 
 # Embedding model
 torch==2.2.2
-transformers==4.35.2
+transformers>=4.42.0
 sentencepiece==0.1.99
 
 # Document processing
