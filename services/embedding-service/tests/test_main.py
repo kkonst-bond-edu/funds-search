@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 sys.modules["transformers"] = MagicMock()
 
 # Import torch after setting up mocks (we need real torch for test tensors)
-import torch
+import torch  # noqa: E402
 
 # Determine the main.py file location
 # When running from services/embedding-service/, main.py is in the parent of tests/
@@ -70,8 +70,8 @@ def client():
 def mock_model_and_tokenizer():
     """Fixture to mock model and tokenizer globally."""
     with (
-        patch.object(embedding_main, "model") as mock_model,
-        patch.object(embedding_main, "tokenizer") as mock_tokenizer,
+        patch.object(embedding_main, "model") ,
+        patch.object(embedding_main, "tokenizer") ,
     ):
         # Setup mock model
         mock_model_instance = MagicMock()
@@ -193,8 +193,6 @@ class TestGenerateEmbeddings:
         mock_model, mock_tokenizer = mock_model_and_tokenizer
 
         # Override mock output with known values for normalization test
-        batch_size = 1
-        hidden_size = 3
         mock_output = MagicMock()
         mock_output.last_hidden_state = torch.tensor([[[3.0, 4.0, 0.0]]])
         mock_model.return_value = mock_output
