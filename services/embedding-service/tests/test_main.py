@@ -7,7 +7,6 @@ which requires significant RAM and is not available in CI environments.
 import pytest
 from unittest.mock import patch, MagicMock
 import numpy as np
-import torch
 
 # Import TestClient - will work with updated httpx version
 from fastapi.testclient import TestClient
@@ -17,6 +16,14 @@ import sys
 import importlib.util
 from pathlib import Path
 import os
+
+# Mock transformers BEFORE importing main.py to avoid loading real models
+# This is critical for CI environments that don't have enough RAM
+# Note: We keep real torch for creating test tensors, but mock it in the module
+sys.modules["transformers"] = MagicMock()
+
+# Import torch after setting up mocks (we need real torch for test tensors)
+import torch
 
 # Determine the main.py file location
 # When running from services/embedding-service/, main.py is in the parent of tests/
