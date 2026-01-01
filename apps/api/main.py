@@ -5,8 +5,8 @@ Refactored to use LangGraph orchestrator.
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
-from shared.schemas import SearchRequest, MatchResult
-from apps.orchestrator import run_search
+from shared.schemas import SearchRequest, MatchResult, MatchRequest, VacancyMatchResult
+from apps.orchestrator import run_search, run_match
 
 
 app = FastAPI(
@@ -57,6 +57,39 @@ async def search(request: SearchRequest):
         raise HTTPException(
             status_code=500,
             detail=f"Error performing search: {str(e)}"
+        )
+
+
+@app.post("/match", response_model=List[VacancyMatchResult])
+async def match(request: MatchRequest):
+    """
+    Match a candidate with vacancies using the LangGraph orchestrator.
+    
+    The orchestrator:
+    1. Fetches the candidate's embedding from Pinecone (based on their processed CV)
+    2. Searches for vacancies in Pinecone using filter {'type': 'vacancy'}
+    3. Uses Gemini to rerank results and explain WHY the vacancy fits the candidate
+    
+    Accepts a JSON payload with:
+    - candidate_id: unique identifier for the candidate (user_id) (required)
+    - top_k: number of top matches to return (optional, default: 10)
+    
+    Returns:
+        List of VacancyMatchResult objects with scores and AI-generated reasoning
+        explaining why each vacancy fits the candidate
+    """
+    try:
+        match_results = await run_match(request)
+        return match_results
+    except ValueError as e:
+        raise HTTPException(
+            status_code=404,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error performing match: {str(e)}"
         )
 
 

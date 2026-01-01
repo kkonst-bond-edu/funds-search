@@ -36,12 +36,36 @@ class Resume(BaseModel):
     created_at: Optional[datetime] = Field(default_factory=datetime.now, description="Creation timestamp")
 
 
+class Vacancy(BaseModel):
+    """Vacancy/Job posting schema."""
+    id: str = Field(..., description="Unique identifier for the vacancy")
+    raw_text: str = Field(..., description="Full text content of the vacancy description")
+    chunks: List[DocumentChunk] = Field(default_factory=list, description="List of document chunks")
+    processed_at: Optional[datetime] = Field(default_factory=datetime.now, description="Processing timestamp")
+    created_at: Optional[datetime] = Field(default_factory=datetime.now, description="Creation timestamp")
+
+
 class MatchResult(BaseModel):
     """Match result schema."""
     score: float = Field(..., description="Similarity score (cosine similarity)")
     reasoning: str = Field(..., description="AI-generated reasoning for the match")
     job: Job = Field(..., description="Matched job posting")
     resume: Optional[Resume] = Field(None, description="Matched resume (if applicable)")
+
+
+class VacancyMatchResult(BaseModel):
+    """Vacancy match result schema for candidate-vacancy matching."""
+    score: float = Field(..., description="Similarity score (cosine similarity)")
+    reasoning: str = Field(..., description="AI-generated reasoning explaining why the vacancy fits the candidate")
+    vacancy_id: str = Field(..., description="ID of the matched vacancy")
+    vacancy_text: str = Field(..., description="Text content of the vacancy")
+    candidate_id: str = Field(..., description="ID of the candidate")
+
+
+class MatchRequest(BaseModel):
+    """Match request schema for candidate-vacancy matching."""
+    candidate_id: str = Field(..., description="Unique identifier for the candidate (user_id)")
+    top_k: Optional[int] = Field(10, description="Number of top matches to return")
 
 
 class SearchRequest(BaseModel):

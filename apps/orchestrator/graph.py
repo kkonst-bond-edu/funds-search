@@ -2,13 +2,13 @@
 LangGraph orchestrator for funds-search matching.
 Implements a state machine with Retrieval and Analysis nodes.
 """
-from typing import TypedDict, List
+from typing import TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
 import httpx
 import os
-from shared.schemas import Job, MatchResult, SearchRequest
+from shared.schemas import Job, MatchResult, SearchRequest, VacancyMatchResult, MatchRequest
 from shared.pinecone_client import VectorStore
 
 
@@ -111,9 +111,10 @@ async def retrieval_node(state: OrchestratorState) -> OrchestratorState:
     for result in search_results:
         metadata = result["metadata"]
         job = Job(
+            id=metadata.get("job_id", metadata.get("id", "unknown")),
             url=metadata.get("url", ""),
             company=metadata.get("company", ""),
-            text=metadata.get("text", ""),
+            raw_text=metadata.get("text", metadata.get("raw_text", "")),
             vector=None,  # Don't store vector in response
             title=metadata.get("title"),
             location=metadata.get("location"),
@@ -162,7 +163,7 @@ Remote: {job.remote}
 URL: {job.url}
 
 Job Description:
-{job.text[:2000]}  # Limit context size
+{job.raw_text[:2000]}  # Limit context size
 """
         
         # Create messages for Gemini
@@ -258,6 +259,233 @@ async def run_search(search_request: SearchRequest) -> List[MatchResult]:
     
     # Run orchestrator
     final_state = await orchestrator.ainvoke(initial_state)
+    
+    return final_state["match_results"]
+
+
+# ============================================================================
+# Candidate-Vacancy Matching Graph
+# ============================================================================
+
+class MatchingState(TypedDict):
+    """State for the candidate-vacancy matching graph."""
+    candidate_id: str
+    candidate_embedding: List[float]
+    retrieved_vacancies: List[Dict[str, Any]]  # List of vacancy search results
+    vacancy_scores: List[float]  # Store similarity scores from Pinecone
+    match_results: List[VacancyMatchResult]
+    top_k: int
+
+
+# System prompt for Gemini agent in candidate-vacancy matching
+MATCHING_SYSTEM_PROMPT = """You are an expert AI recruiter specializing in matching candidates with job vacancies.
+
+Your task is to analyze why a specific vacancy is a good fit for a candidate based on:
+1. The candidate's skills, experience, and background (from their CV/resume)
+2. The vacancy's requirements and responsibilities
+3. Alignment between candidate capabilities and job needs
+4. Cultural fit and career growth opportunities
+
+Provide clear, detailed reasoning that explains WHY this vacancy fits the candidate.
+Be specific about:
+- How the candidate's skills match the job requirements
+- Relevant experience that makes them suitable
+- Potential gaps and how they might be addressed
+- Why this role would be a good career move for the candidate
+
+Format your response as a structured explanation that a recruiter would use to present the match to both the candidate and the hiring manager."""
+
+
+async def fetch_candidate_node(state: MatchingState) -> MatchingState:
+    """
+    Node 1: Fetch candidate embedding from Pinecone.
+    
+    Args:
+        state: Current matching state
+        
+    Returns:
+        Updated state with candidate_embedding
+    """
+    candidate_id = state["candidate_id"]
+    
+    # Get candidate embedding from Pinecone
+    pc_client = get_pinecone_client()
+    candidate_embedding = pc_client.get_candidate_embedding(candidate_id)
+    
+    if candidate_embedding is None:
+        raise ValueError(f"Candidate with ID {candidate_id} not found in Pinecone. Please ensure the CV has been processed.")
+    
+    return {
+        **state,
+        "candidate_embedding": candidate_embedding
+    }
+
+
+async def search_vacancies_node(state: MatchingState) -> MatchingState:
+    """
+    Node 2: Search for vacancies in Pinecone using filter {'type': 'vacancy'}.
+    
+    Args:
+        state: Current matching state
+        
+    Returns:
+        Updated state with retrieved_vacancies and vacancy_scores
+    """
+    candidate_embedding = state["candidate_embedding"]
+    top_k = state.get("top_k", 10)
+    
+    # Search for vacancies
+    pc_client = get_pinecone_client()
+    search_results = pc_client.search_vacancies(
+        query_vector=candidate_embedding,
+        top_k=top_k
+    )
+    
+    # Extract vacancies and scores
+    retrieved_vacancies = []
+    vacancy_scores = []
+    for result in search_results:
+        retrieved_vacancies.append(result)
+        vacancy_scores.append(result["score"])
+    
+    return {
+        **state,
+        "retrieved_vacancies": retrieved_vacancies,
+        "vacancy_scores": vacancy_scores
+    }
+
+
+async def rerank_and_explain_node(state: MatchingState) -> MatchingState:
+    """
+    Node 3: Use Gemini to rerank results and explain WHY the vacancy fits the candidate.
+    
+    Args:
+        state: Current matching state
+        
+    Returns:
+        Updated state with match_results
+    """
+    candidate_id = state["candidate_id"]
+    retrieved_vacancies = state["retrieved_vacancies"]
+    vacancy_scores = state.get("vacancy_scores", [])
+    
+    # Get candidate's resume text for context (optional, can be enhanced)
+    # For now, we'll use the candidate_id in the prompt
+    pc_client = get_pinecone_client()
+    
+    match_results = []
+    
+    for idx, vacancy_result in enumerate(retrieved_vacancies):
+        similarity_score = vacancy_scores[idx] if idx < len(vacancy_scores) else 0.0
+        vacancy_metadata = vacancy_result.get("metadata", {})
+        vacancy_id = vacancy_metadata.get("vacancy_id", vacancy_result.get("id", "unknown"))
+        vacancy_text = vacancy_metadata.get("text", "")
+        
+        # Prepare context for Gemini
+        vacancy_context = f"""
+Vacancy ID: {vacancy_id}
+Vacancy Description:
+{vacancy_text[:2000]}  # Limit context size
+"""
+        
+        # Create messages for Gemini
+        messages = [
+            SystemMessage(content=MATCHING_SYSTEM_PROMPT),
+            HumanMessage(content=f"""
+Candidate ID: {candidate_id}
+Similarity Score: {similarity_score:.4f}
+
+Vacancy:
+{vacancy_context}
+
+Please analyze why this vacancy is a good fit for this candidate and provide:
+1. Detailed reasoning explaining WHY the vacancy fits the candidate
+2. Specific skills and experience that align
+3. Potential benefits for the candidate's career
+4. Any concerns or gaps that should be considered
+
+Provide a comprehensive explanation that would help a recruiter present this match.
+""")
+        ]
+        
+        # Get analysis from Gemini
+        try:
+            gemini_llm = get_llm()
+            response = await gemini_llm.ainvoke(messages)
+            reasoning = response.content if hasattr(response, 'content') else str(response)
+        except Exception as e:
+            reasoning = f"Error generating analysis: {str(e)}"
+        
+        # Create match result
+        match_result = VacancyMatchResult(
+            score=similarity_score,
+            reasoning=reasoning,
+            vacancy_id=vacancy_id,
+            vacancy_text=vacancy_text,
+            candidate_id=candidate_id
+        )
+        
+        match_results.append(match_result)
+    
+    return {
+        **state,
+        "match_results": match_results
+    }
+
+
+def create_matching_graph() -> StateGraph:
+    """
+    Create and compile the LangGraph orchestrator for candidate-vacancy matching.
+    
+    Returns:
+        Compiled StateGraph
+    """
+    # Create graph
+    workflow = StateGraph(MatchingState)
+    
+    # Add nodes
+    workflow.add_node("fetch_candidate", fetch_candidate_node)
+    workflow.add_node("search_vacancies", search_vacancies_node)
+    workflow.add_node("rerank_and_explain", rerank_and_explain_node)
+    
+    # Define edges
+    workflow.set_entry_point("fetch_candidate")
+    workflow.add_edge("fetch_candidate", "search_vacancies")
+    workflow.add_edge("search_vacancies", "rerank_and_explain")
+    workflow.add_edge("rerank_and_explain", END)
+    
+    # Compile graph
+    app = workflow.compile()
+    
+    return app
+
+
+# Global matching orchestrator instance
+matching_orchestrator = create_matching_graph()
+
+
+async def run_match(match_request: MatchRequest) -> List[VacancyMatchResult]:
+    """
+    Run the matching orchestrator for a candidate-vacancy match request.
+    
+    Args:
+        match_request: MatchRequest object with candidate_id
+        
+    Returns:
+        List of VacancyMatchResult objects
+    """
+    # Initialize state
+    initial_state: MatchingState = {
+        "candidate_id": match_request.candidate_id,
+        "candidate_embedding": [],
+        "retrieved_vacancies": [],
+        "vacancy_scores": [],
+        "match_results": [],
+        "top_k": match_request.top_k or 10
+    }
+    
+    # Run orchestrator
+    final_state = await matching_orchestrator.ainvoke(initial_state)
     
     return final_state["match_results"]
 

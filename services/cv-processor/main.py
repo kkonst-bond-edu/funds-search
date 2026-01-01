@@ -9,7 +9,8 @@ from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from starlette.concurrency import run_in_threadpool
 from docling.document_converter import DocumentConverter
-from shared.schemas import Resume, DocumentChunk
+from shared.schemas import Resume, DocumentChunk, Vacancy
+from pydantic import BaseModel, Field
 from shared.pinecone_client import VectorStore
 
 app = FastAPI(title="CV Processor Service")
@@ -71,3 +72,54 @@ async def process_cv(user_id: str, file: UploadFile = File(...)):
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+
+
+class VacancyRequest(BaseModel):
+    """Request schema for processing a vacancy."""
+    text: str = Field(..., description="Text description of the vacancy")
+
+
+@app.post("/process-vacancy")
+async def process_vacancy(request: VacancyRequest):
+    """
+    Process a vacancy description: embed it and save to Pinecone with metadata {'type': 'vacancy'}.
+    
+    Args:
+        request: VacancyRequest containing the text description
+        
+    Returns:
+        Dictionary with status, vacancy_id, and chunks_processed
+    """
+    vacancy_text = request.text
+    
+    # 1. Разбиваем на чанки (упрощенно)
+    # В идеале здесь использовать LangChain RecursiveCharacterTextSplitter
+    chunks_text = [vacancy_text[i:i+1000] for i in range(0, len(vacancy_text), 800)]
+    
+    # 2. Получаем эмбеддинги
+    embeddings = await get_embeddings(chunks_text)
+    
+    # 3. Собираем объект Vacancy с metadata type='vacancy'
+    doc_chunks = [
+        DocumentChunk(
+            text=txt, 
+            embedding=emb, 
+            metadata={"type": "vacancy", "source": "api"}
+        )
+        for txt, emb in zip(chunks_text, embeddings)
+    ]
+    
+    vacancy = Vacancy(
+        id=str(uuid.uuid4()),
+        raw_text=vacancy_text,
+        chunks=doc_chunks
+    )
+    
+    # 4. Сохраняем в Pinecone
+    vector_store.upsert_vacancy(vacancy)
+    
+    return {
+        "status": "success", 
+        "vacancy_id": vacancy.id, 
+        "chunks_processed": len(doc_chunks)
+    }
