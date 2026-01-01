@@ -2,7 +2,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: apps/api/Dockerfile
     ports:
       - "8000:8000"
     environment:
@@ -18,7 +18,7 @@ services:
   embedding-service:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: services/embedding-service/Dockerfile
     command: uvicorn services.embedding-service.main:app --host 0.0.0.0 --port 8001
     ports:
       - "8001:8001"
@@ -27,14 +27,6 @@ services:
     volumes:
       - ./services:/app/services
       - ./shared:/app/shared
-    # Uncomment if using GPU
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
 
   cv-processor:
     build:
@@ -43,16 +35,16 @@ services:
     ports:
       - "8002:8001"
     env_file:
-      - .env  # Это заставит Docker Compose принудительно читать ваш файл
+      - .env
     environment:
       - PINECONE_API_KEY=${PINECONE_API_KEY}
       - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME}
-      - EMBEDDING_SERVICE_URL=${EMBEDDING_SERVICE_URL}
+      - EMBEDDING_SERVICE_URL=http://embedding-service:8001
 
   vc-worker:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: services/vc-worker/Dockerfile
     command: uvicorn services.vc-worker.main:app --host 0.0.0.0 --port 8003
     ports:
       - "8003:8003"

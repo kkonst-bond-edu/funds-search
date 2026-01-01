@@ -5,8 +5,9 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import uuid
 import httpx
-from typing import List
+from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.concurrency import run_in_executor
 from docling.document_converter import DocumentConverter
 from shared.schemas import Resume, DocumentChunk
 from shared.pinecone_client import VectorStore
@@ -38,8 +39,8 @@ async def process_cv(user_id: str, file: UploadFile = File(...)):
         buffer.write(await file.read())
 
     try:
-        # 2. Docling: PDF -> Markdown
-        result = doc_converter.convert(temp_path)
+        # 2. Docling: PDF -> Markdown (run in thread pool to avoid blocking event loop)
+        result = await run_in_executor(None, doc_converter.convert, temp_path)
         markdown_text = result.document.export_to_markdown()
 
         # 3. Разбиваем на чанки (упрощенно)

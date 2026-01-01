@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Dict, Any, Optional
 from pinecone import Pinecone
 from shared.schemas import Resume, DocumentChunk
 
@@ -27,11 +27,20 @@ class VectorStore:
         # Pinecone рекомендует загружать пачками (batching)
         self.index.upsert(vectors=vectors, namespace="resumes")
 
-    def search_similar(self, query_vector: List[float], top_k: int = 5):
+    def search_similar(self, query_vector: List[float], top_k: int = 5, filter_dict: Optional[Dict[str, Any]] = None):
         """Поиск похожих документов."""
-        return self.index.query(
+        query_result = self.index.query(
             vector=query_vector,
             top_k=top_k,
             include_metadata=True,
+            filter=filter_dict if filter_dict else None,
             namespace="resumes"
         )
+        # Convert Pinecone query result to list of dicts with metadata and score
+        results = []
+        for match in query_result.matches:
+            results.append({
+                "metadata": match.metadata or {},
+                "score": match.score or 0.0
+            })
+        return results

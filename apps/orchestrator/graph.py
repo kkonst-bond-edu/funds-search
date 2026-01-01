@@ -9,7 +9,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 import httpx
 import os
 from shared.schemas import Job, MatchResult, SearchRequest
-from shared.pinecone_client import PineconeClient
+from shared.pinecone_client import VectorStore
 
 
 class OrchestratorState(TypedDict):
@@ -31,11 +31,11 @@ pinecone_client = None
 llm = None
 
 
-def get_pinecone_client() -> PineconeClient:
+def get_pinecone_client() -> VectorStore:
     """Get or create Pinecone client instance."""
     global pinecone_client
     if pinecone_client is None:
-        pinecone_client = PineconeClient()
+        pinecone_client = VectorStore()
     return pinecone_client
 
 
