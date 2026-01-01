@@ -1,270 +1,353 @@
 # Funds Search: Multi-Agent RAG Matching System
 
-A production-ready system for matching candidates with job vacancies using LangGraph orchestration, semantic embeddings, and AI-powered reasoning.
+Production-ready candidate-vacancy matching system using LangGraph orchestration, semantic embeddings (BGE-M3), and AI reasoning (Gemini).
 
 ## Overview
 
-Funds Search uses a Multi-Agent RAG (Retrieval-Augmented Generation) architecture to:
-- Process and index CV/resume documents
-- Process and index vacancy descriptions
-- Match candidates with vacancies using semantic similarity and AI reasoning
-- Provide a user-friendly web interface for recruiters
+Multi-Agent RAG architecture that processes CVs/vacancies, generates embeddings, stores vectors in Pinecone, and matches candidates using semantic similarity + AI analysis.
 
-## Architecture
+## System Architecture
 
 ```mermaid
 graph TB
-    subgraph "Client Layer"
-        User[User/Recruiter]
-        WebUI[Streamlit Web UI<br/>Port 8501]
+    subgraph "Client"
+        User[👤 Recruiter] --> WebUI[📊 Streamlit UI<br/>:8501]
     end
     
-    subgraph "API Layer"
-        API[FastAPI API<br/>Port 8000]
+    subgraph "API Gateway"
+        WebUI --> API[🚀 FastAPI<br/>:8000]
+        WebUI -->|Upload CV| CVProc[📄 CV Processor<br/>:8002]
     end
     
-    subgraph "Orchestration Layer"
-        Orchestrator[LangGraph Orchestrator]
-        RetrievalNode[Retrieval Node]
-        AnalysisNode[Analysis Node]
+    subgraph "Orchestration"
+        API -->|Search/Match| Orch[🔄 LangGraph<br/>Orchestrator]
+        Orch -->|1. Retrieve| RetNode[🔍 Retrieval Node]
+        Orch -->|2. Analyze| AnaNode[🤖 Analysis Node]
     end
     
-    subgraph "Services Layer"
-        EmbeddingService[Embedding Service<br/>BGE-M3 Model<br/>Port 8001]
-        CVProcessor[CV Processor<br/>Docling Parser<br/>Port 8002]
+    subgraph "Services"
+        RetNode -->|Embed Query| EmbSvc[🧮 Embedding Service<br/>BGE-M3 :8001]
+        RetNode -->|Vector Search| PC[(📦 Pinecone<br/>Vector DB)]
+        CVProc -->|Get Embeddings| EmbSvc
+        CVProc -->|Store Vectors| PC
     end
     
-    subgraph "External Services"
-        Pinecone[(Pinecone<br/>Vector Database)]
-        Gemini[Google Gemini AI<br/>LLM]
+    subgraph "AI"
+        AnaNode -->|Reasoning| Gemini[🧠 Gemini 2.5 Flash<br/>LLM]
     end
     
-    subgraph "Shared Components"
-        Schemas[Shared Schemas<br/>Pydantic v2 Models]
-        PineconeClient[Pinecone Client]
+    subgraph "Data Models"
+        Schemas[📋 Pydantic Schemas<br/>shared/schemas.py]
+        Schemas -.->|Used by| API
+        Schemas -.->|Used by| Orch
+        Schemas -.->|Used by| CVProc
     end
-    
-    User -->|Upload CV/Find Matches| WebUI
-    WebUI -->|HTTP| API
-    WebUI -->|HTTP| CVProcessor
-    
-    API -->|Search/Match Request| Orchestrator
-    
-    Orchestrator -->|1. Retrieval| RetrievalNode
-    RetrievalNode -->|Get Embedding| EmbeddingService
-    RetrievalNode -->|Vector Search| PineconeClient
-    PineconeClient -->|Query| Pinecone
-    Pinecone -->|Top K Matches| PineconeClient
-    
-    Orchestrator -->|2. Analysis| AnalysisNode
-    AnalysisNode -->|Analyze Matches| Gemini
-    Gemini -->|AI Reasoning| AnalysisNode
-    
-    AnalysisNode -->|Match Results| Orchestrator
-    Orchestrator -->|Results| API
-    API -->|JSON Response| WebUI
-    
-    CVProcessor -->|Get Embeddings| EmbeddingService
-    CVProcessor -->|Store Vectors| PineconeClient
-    
-    Schemas -.->|Used by| API
-    Schemas -.->|Used by| Orchestrator
-    Schemas -.->|Used by| CVProcessor
-    Schemas -.->|Used by| WebUI
     
     style User fill:#e1f5ff
     style WebUI fill:#c8e6c9
     style API fill:#c8e6c9
-    style Orchestrator fill:#fff9c4
-    style EmbeddingService fill:#f3e5f5
-    style CVProcessor fill:#f3e5f5
-    style Pinecone fill:#ffccbc
+    style Orch fill:#fff9c4
+    style EmbSvc fill:#f3e5f5
+    style CVProc fill:#f3e5f5
+    style PC fill:#ffccbc
     style Gemini fill:#ffccbc
+    style Schemas fill:#e8f5e9
+```
+
+## Data Schemas
+
+All schemas defined in `shared/schemas.py` (Pydantic v2, single source of truth):
+
+### Core Models
+
+**`DocumentChunk`** - Semantic text chunks with embeddings
+```python
+{
+  "text": str,              # Chunk content
+  "metadata": Dict,         # Additional metadata
+  "embedding": List[float]  # 1024-dim BGE-M3 vector
+}
+```
+
+**`Resume`** - Candidate CV/resume
+```python
+{
+  "id": str,                    # Unique resume ID
+  "user_id": str,               # Candidate identifier
+  "raw_text": str,              # Full CV text
+  "chunks": List[DocumentChunk], # Processed chunks
+  "processed_at": datetime,
+  "created_at": datetime
+}
+```
+
+**`Vacancy`** - Job posting
+```python
+{
+  "id": str,                    # Unique vacancy ID
+  "raw_text": str,              # Full job description
+  "chunks": List[DocumentChunk], # Processed chunks
+  "processed_at": datetime,
+  "created_at": datetime
+}
+```
+
+**`Job`** - Job opening (search results)
+```python
+{
+  "id": str,
+  "company": str,
+  "title": str | None,
+  "raw_text": str,
+  "vector": List[float] | None,
+  "url": str | None,
+  "location": str | None,
+  "remote": bool | None,
+  "created_at": datetime
+}
+```
+
+### Request/Response Models
+
+**`SearchRequest`** - Job search query
+```python
+{
+  "query": str,              # Required: search text
+  "location": str | None,    # Optional filter
+  "role": str | None,        # Optional job title filter
+  "remote": bool | None,     # Optional remote filter
+  "user_id": str | None      # Optional personalization
+}
+```
+
+**`MatchRequest`** - Candidate-vacancy matching
+```python
+{
+  "candidate_id": str,       # Required: user_id
+  "top_k": int = 10          # Number of matches
+}
+```
+
+**`MatchResult`** - Search/match result
+```python
+{
+  "score": float,            # Cosine similarity (0-1)
+  "reasoning": str,          # AI-generated explanation
+  "job": Job,                # Matched job posting
+  "resume": Resume | None    # Candidate resume (if applicable)
+}
+```
+
+**`VacancyMatchResult`** - Candidate-vacancy match
+```python
+{
+  "score": float,            # Similarity score
+  "reasoning": str,          # Why vacancy fits candidate
+  "vacancy_id": str,
+  "vacancy_text": str,
+  "candidate_id": str
+}
 ```
 
 ## Components
 
-### Apps (`apps/`)
-- **api**: FastAPI REST API with LangGraph orchestrator (Port 8000)
-- **web_ui**: Streamlit dashboard for CV upload and matching (Port 8501)
-- **orchestrator**: LangGraph state machine for search and matching workflows
-
-### Services (`services/`)
-- **embedding-service**: BGE-M3 embedding model service (Port 8001)
-- **cv-processor**: PDF/DOCX processing and vector storage (Port 8002 external, 8001 internal)
-- **vc-worker**: Placeholder for future job scraping functionality (Port 8003)
-
-### Shared (`shared/`)
-- **schemas.py**: Pydantic v2 models (single source of truth for data structures)
-- **pinecone_client.py**: Vector database client wrapper
+| Component | Port | Description |
+|-----------|------|-------------|
+| **web-ui** | 8501 | Streamlit dashboard (CV upload, match viewing) |
+| **api** | 8000 | FastAPI REST API + LangGraph orchestrator |
+| **embedding-service** | 8001 | BGE-M3 embedding model (1024-dim vectors) |
+| **cv-processor** | 8002 | PDF→Markdown (Docling), chunking, vectorization |
+| **vc-worker** | 8003 | Placeholder for job scraping |
 
 ## Tech Stack
 
-- **Orchestration**: LangGraph/LangChain
-- **LLM**: Google Gemini (for AI reasoning)
-- **Embeddings**: BAAI/bge-m3 (1024-dimensional vectors)
-- **Vector DB**: Pinecone (namespaces: "cvs", "vacancies")
-- **API Framework**: FastAPI/Uvicorn
+- **Orchestration**: LangGraph state machines
+- **LLM**: Google Gemini 2.5 Flash (reasoning)
+- **Embeddings**: BAAI/bge-m3 (1024-dim)
+- **Vector DB**: Pinecone (namespaces: `cvs`, `vacancies`)
+- **API**: FastAPI/Uvicorn
 - **UI**: Streamlit
-- **Document Processing**: Docling (PDF → Markdown)
-- **Deployment**: Docker, Azure Container Apps, GitHub Actions
+- **Document Parser**: Docling (PDF→Markdown)
+- **Deployment**: Docker, Azure Container Apps
 
 ## Quick Start
 
 ### Prerequisites
-
-- Docker and Docker Compose
-- Environment variables (create `.env` file):
+- Docker & Docker Compose
+- `.env` file with:
   ```bash
   PINECONE_API_KEY=your_key
   PINECONE_INDEX_NAME=funds-search
   GOOGLE_API_KEY=your_key
   ```
 
-### Local Development
+### Run Locally
+```bash
+git clone <repo-url>
+cd funds-search
+cp .env.example .env  # Add your API keys
+docker-compose up --build
+```
 
-1. **Clone and setup**:
-   ```bash
-   git clone <repo-url>
-   cd funds-search
-   cp .env.example .env  # Create .env with your API keys
-   ```
-
-2. **Start all services**:
-   ```bash
-   docker-compose up --build
-   ```
-
-3. **Access the UI**:
-   - Web UI: http://localhost:8501
-   - API: http://localhost:8000
-   - API Docs: http://localhost:8000/docs
+**Access:**
+- 🌐 Web UI: http://localhost:8501
+- 🔌 API: http://localhost:8000
+- 📚 API Docs: http://localhost:8000/docs
 
 ## API Endpoints
 
-### Main API (Port 8000)
+### Main API (`:8000`)
 
-- `GET /health` - Health check
-- `POST /search` - Search for job openings
-  ```json
-  {
-    "query": "software engineer",
-    "location": "San Francisco",
-    "role": "engineer",
-    "remote": true,
-    "user_id": "optional"
-  }
-  ```
-- `POST /match` - Match candidate with vacancies
-  ```json
-  {
-    "candidate_id": "user123",
-    "top_k": 10
-  }
-  ```
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/search` | POST | Search jobs (returns `List[MatchResult]`) |
+| `/match` | POST | Match candidate→vacancies (returns `List[VacancyMatchResult]`) |
 
-### CV Processor (Port 8002)
+**`POST /search`** - Job search with filters
+```json
+{
+  "query": "software engineer",
+  "location": "San Francisco",
+  "role": "engineer",
+  "remote": true,
+  "user_id": "optional"
+}
+```
 
-- `POST /process-cv` - Upload and process CV (multipart/form-data with `user_id` and `file`)
-- `POST /process-vacancy` - Process vacancy description (JSON with `vacancy_id` and `text`)
+**`POST /match`** - Candidate-vacancy matching
+```json
+{
+  "candidate_id": "user123",
+  "top_k": 10
+}
+```
 
-### Embedding Service (Port 8001)
+### CV Processor (`:8002`)
+- `POST /process-cv` - Upload CV (multipart: `user_id`, `file`)
+- `POST /process-vacancy` - Process vacancy (JSON: `vacancy_id`, `text`)
 
-- `POST /embed` - Generate embeddings for texts
-  ```json
-  {
-    "texts": ["text to embed"]
-  }
-  ```
+### Embedding Service (`:8001`)
+- `POST /embed` - Generate embeddings
+```json
+{
+  "texts": ["text to embed"]
+}
+```
 
 ## Data Flow
 
-### CV Processing Flow
-1. User uploads PDF via Web UI
-2. CV Processor converts PDF → Markdown (Docling, async via `run_in_threadpool`)
-3. Text chunked (1000 chars, 800 overlap)
-4. Embeddings generated via Embedding Service
-5. Stored in Pinecone namespace "cvs"
+### CV Processing Pipeline
 
-### Matching Flow
-1. User requests matches for candidate_id
-2. API → Orchestrator → Retrieval Node
-3. Fetch candidate embedding from Pinecone "cvs" namespace
-4. Search vacancies in Pinecone "vacancies" namespace
-5. Analysis Node uses Gemini to rerank and generate reasoning
-6. Return ranked results with scores and AI explanations
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant W as Web UI
+    participant C as CV Processor
+    participant E as Embedding Service
+    participant P as Pinecone
+    
+    U->>W: Upload PDF
+    W->>C: POST /process-cv
+    C->>C: PDF → Markdown (Docling)
+    C->>C: Chunk (1000 chars, 800 overlap)
+    C->>E: POST /embed
+    E-->>C: Embeddings (1024-dim)
+    C->>P: Store vectors (namespace: "cvs")
+    C-->>W: Success
+    W-->>U: CV Processed
+```
+
+### Matching Pipeline
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant A as API
+    participant O as Orchestrator
+    participant R as Retrieval Node
+    participant An as Analysis Node
+    participant P as Pinecone
+    participant G as Gemini
+    
+    U->>A: POST /match {candidate_id}
+    A->>O: Run matching graph
+    O->>R: Fetch candidate embedding
+    R->>P: Get from "cvs" namespace
+    P-->>R: Candidate vector
+    R->>P: Search "vacancies" namespace
+    P-->>R: Top K vacancies
+    R-->>O: Retrieved results
+    O->>An: Analyze matches
+    An->>G: Generate reasoning
+    G-->>An: AI explanations
+    An-->>O: Match results
+    O-->>A: List[VacancyMatchResult]
+    A-->>U: Ranked matches + scores
+```
 
 ## Deployment
 
 ### Azure Container Apps
 
-Each component has a GitHub Actions workflow:
-- `.github/workflows/deploy-api.yml` - API service (optimized <500MB image)
-- `.github/workflows/deploy-web-ui.yml` - Web UI
-- `.github/workflows/deploy-cv-processor.yml` - CV Processor
-- `.github/workflows/deploy-embedding.yml` - Embedding Service
-
 **Registry**: `fundssearchregistry.azurecr.io`
 
-**Container Apps**:
-- `api` (Port 8000)
-- `web-ui` (Port 8501)
-- `cv-processor` (Port 8001)
-- `embedding-service` (Port 8001)
+| Service | Container App | Port | Workflow |
+|---------|---------------|------|----------|
+| API | `api` | 8000 | `deploy-api.yml` (<500MB image) |
+| Web UI | `web-ui` | 8501 | `deploy-web-ui.yml` |
+| CV Processor | `cv-processor` | 8001 | `deploy-cv-processor.yml` |
+| Embedding | `embedding-service` | 8001 | `deploy-embedding.yml` |
 
 ### Environment Variables
 
-**API Service**:
-- `PINECONE_API_KEY`
-- `GOOGLE_API_KEY`
-- `EMBEDDING_SERVICE_URL` (default: `http://embedding-service:8001`)
-
-**Web UI**:
-- `BACKEND_API_URL` (default: `http://api:8000`)
-- `CV_PROCESSOR_URL` (default: `http://cv-processor:8001`)
-
-**CV Processor**:
-- `PINECONE_API_KEY`
-- `PINECONE_INDEX_NAME`
-- `EMBEDDING_SERVICE_URL`
+| Service | Required Variables |
+|---------|-------------------|
+| **API** | `PINECONE_API_KEY`, `GOOGLE_API_KEY`, `EMBEDDING_SERVICE_URL` |
+| **Web UI** | `BACKEND_API_URL`, `CV_PROCESSOR_URL` |
+| **CV Processor** | `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, `EMBEDDING_SERVICE_URL` |
+| **Embedding** | (None - model loaded at startup) |
 
 ## Project Structure
 
 ```
 funds-search/
 ├── apps/
-│   ├── api/              # FastAPI REST API
-│   ├── orchestrator/     # LangGraph workflows
+│   ├── api/              # FastAPI REST API + LangGraph
+│   ├── orchestrator/     # LangGraph state machines
 │   └── web_ui/           # Streamlit dashboard
 ├── services/
-│   ├── cv-processor/     # CV processing service
-│   ├── embedding-service/ # BGE-M3 embedding service
+│   ├── cv-processor/     # PDF→Markdown, chunking, vectorization
+│   ├── embedding-service/ # BGE-M3 model service
 │   └── vc-worker/        # (Placeholder)
 ├── shared/
 │   ├── schemas.py        # Pydantic v2 models (SSOT)
-│   └── pinecone_client.py # Vector DB client
+│   └── pinecone_client.py # Vector DB wrapper
 ├── requirements/         # Dependency management
-│   ├── base.txt         # Common dependencies
-│   ├── ml.txt           # ML libraries (torch, transformers)
-│   └── api.txt          # API dependencies (no ML)
-├── docker-compose.yml
-└── .github/workflows/   # CI/CD pipelines
+│   ├── base.txt         # Common deps
+│   ├── ml.txt           # ML (torch, transformers)
+│   └── api.txt          # API (no ML)
+└── .github/workflows/   # CI/CD (Azure deployments)
 ```
 
 ## Documentation
 
 - **[Services README](services/README.md)** - Microservices architecture
 - **[Apps README](apps/README.md)** - Application components
-- **[Shared README](shared/README.md)** - Shared modules and schemas
+- **[Shared README](shared/README.md)** - Shared modules
 
-## Notes / Assumptions
+## Key Implementation Details
 
-- **Schemas**: All Pydantic v2 models are in `shared/schemas.py` (single source of truth)
-- **Ports**: External ports differ from internal for cv-processor (8002 vs 8001)
-- **CV Processing**: Uses `run_in_threadpool` for Docling to avoid blocking async event loop
-- **Image Optimization**: API service uses multi-stage Docker build to reduce size from 4GB to <500MB
-- **Namespaces**: Pinecone uses "cvs" for candidate resumes and "vacancies" for job postings
-- **Web UI**: Requires `BACKEND_API_URL` and `CV_PROCESSOR_URL` environment variables
+| Aspect | Implementation |
+|--------|----------------|
+| **Schemas** | Single source of truth: `shared/schemas.py` (Pydantic v2) |
+| **Ports** | CV Processor: 8002 (external) → 8001 (internal) |
+| **CV Processing** | `run_in_threadpool` for Docling (non-blocking async) |
+| **Image Size** | API: multi-stage build (4GB → <500MB) |
+| **Pinecone** | Namespaces: `"cvs"` (resumes), `"vacancies"` (jobs) |
+| **Chunking** | 1000 chars, 800 overlap |
+| **Embeddings** | BGE-M3 (1024 dimensions) |
+| **LLM** | Gemini 2.5 Flash (reasoning & reranking) |
 
 ## License
 
