@@ -7,7 +7,7 @@ import uuid
 import httpx
 from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.concurrency import run_in_executor
+from starlette.concurrency import run_in_threadpool
 from docling.document_converter import DocumentConverter
 from shared.schemas import Resume, DocumentChunk
 from shared.pinecone_client import VectorStore
@@ -40,7 +40,7 @@ async def process_cv(user_id: str, file: UploadFile = File(...)):
 
     try:
         # 2. Docling: PDF -> Markdown (run in thread pool to avoid blocking event loop)
-        result = await run_in_executor(None, doc_converter.convert, temp_path)
+        result = await run_in_threadpool(doc_converter.convert, temp_path)
         markdown_text = result.document.export_to_markdown()
 
         # 3. Разбиваем на чанки (упрощенно)
