@@ -5,6 +5,8 @@ from pinecone import Pinecone
 from shared.schemas import Resume, DocumentChunk, Vacancy
 import numpy as np
 
+# Configure logging at INFO level
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class VectorStore:

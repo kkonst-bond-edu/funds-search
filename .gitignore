@@ -47,3 +47,11 @@ Thumbs.db
 # Model cache (Hugging Face)
 .cache/
 models/
+
+# Testing
+.pytest_cache/
+*.pdf.tmp
+temp_*.pdf
+
+# Docling cache
+.docling_cache/
