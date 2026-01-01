@@ -308,9 +308,9 @@ async def fetch_candidate_node(state: MatchingState) -> MatchingState:
     """
     candidate_id = state["candidate_id"]
     
-    # Get candidate embedding from Pinecone
+    # Get candidate embedding from Pinecone using namespace "cvs"
     pc_client = get_pinecone_client()
-    candidate_embedding = pc_client.get_candidate_embedding(candidate_id)
+    candidate_embedding = pc_client.get_candidate_embedding(candidate_id, namespace="cvs")
     
     if candidate_embedding is None:
         raise ValueError(f"Candidate with ID {candidate_id} not found in Pinecone. Please ensure the CV has been processed.")
@@ -334,19 +334,31 @@ async def search_vacancies_node(state: MatchingState) -> MatchingState:
     candidate_embedding = state["candidate_embedding"]
     top_k = state.get("top_k", 10)
     
-    # Search for vacancies
+    # Search for vacancies using namespace "vacancies"
     pc_client = get_pinecone_client()
     search_results = pc_client.search_vacancies(
         query_vector=candidate_embedding,
-        top_k=top_k
+        top_k=top_k,
+        namespace="vacancies"
     )
     
     # Extract vacancies and scores
+    # search_results is already a list of dicts with 'id', 'metadata', 'score'
     retrieved_vacancies = []
     vacancy_scores = []
     for result in search_results:
-        retrieved_vacancies.append(result)
-        vacancy_scores.append(result["score"])
+        # Ensure result is a dict (not a Pydantic model or other object)
+        if isinstance(result, dict):
+            retrieved_vacancies.append(result)
+            vacancy_scores.append(result.get("score", 0.0))
+        else:
+            # Convert to dict if needed
+            retrieved_vacancies.append({
+                "id": getattr(result, "id", "unknown"),
+                "metadata": getattr(result, "metadata", {}),
+                "score": getattr(result, "score", 0.0)
+            })
+            vacancy_scores.append(getattr(result, "score", 0.0))
     
     return {
         **state,
@@ -377,15 +389,47 @@ async def rerank_and_explain_node(state: MatchingState) -> MatchingState:
     
     for idx, vacancy_result in enumerate(retrieved_vacancies):
         similarity_score = vacancy_scores[idx] if idx < len(vacancy_scores) else 0.0
-        vacancy_metadata = vacancy_result.get("metadata", {})
-        vacancy_id = vacancy_metadata.get("vacancy_id", vacancy_result.get("id", "unknown"))
-        vacancy_text = vacancy_metadata.get("text", "")
         
-        # Prepare context for Gemini
+        # Ensure vacancy_result is a dict
+        if not isinstance(vacancy_result, dict):
+            # Convert to dict if it's not already
+            vacancy_result = {
+                "id": str(getattr(vacancy_result, "id", "unknown")),
+                "metadata": getattr(vacancy_result, "metadata", {}),
+                "score": float(getattr(vacancy_result, "score", 0.0))
+            }
+        
+        # Safely extract metadata - ensure it's a dict
+        vacancy_metadata = vacancy_result.get("metadata", {})
+        if not isinstance(vacancy_metadata, dict):
+            vacancy_metadata = {}
+        
+        # Extract vacancy_id - ensure it's a clean string
+        vacancy_id = str(vacancy_metadata.get("vacancy_id", vacancy_result.get("id", "unknown")))
+        
+        # Extract vacancy_text - ensure it's a clean string (not a list or object)
+        vacancy_text_raw = vacancy_metadata.get("text", "")
+        if isinstance(vacancy_text_raw, str):
+            vacancy_text = vacancy_text_raw
+        elif isinstance(vacancy_text_raw, list):
+            # If text is a list, join it
+            vacancy_text = " ".join(str(item) for item in vacancy_text_raw)
+        else:
+            # Convert to string if it's something else
+            vacancy_text = str(vacancy_text_raw) if vacancy_text_raw else ""
+        
+        # Ensure vacancy_text is not empty, try to get from raw_text or other fields
+        if not vacancy_text:
+            vacancy_text = str(vacancy_metadata.get("raw_text", ""))
+        
+        # Limit text length for LLM context
+        vacancy_text = vacancy_text[:2000] if len(vacancy_text) > 2000 else vacancy_text
+        
+        # Prepare context for Gemini - ensure all values are clean strings
         vacancy_context = f"""
 Vacancy ID: {vacancy_id}
 Vacancy Description:
-{vacancy_text[:2000]}  # Limit context size
+{vacancy_text}
 """
         
         # Create messages for Gemini
@@ -416,13 +460,13 @@ Provide a comprehensive explanation that would help a recruiter present this mat
         except Exception as e:
             reasoning = f"Error generating analysis: {str(e)}"
         
-        # Create match result
+        # Create match result - ensure all values are clean types
         match_result = VacancyMatchResult(
-            score=similarity_score,
-            reasoning=reasoning,
-            vacancy_id=vacancy_id,
-            vacancy_text=vacancy_text,
-            candidate_id=candidate_id
+            score=float(similarity_score),
+            reasoning=str(reasoning),
+            vacancy_id=str(vacancy_id),
+            vacancy_text=str(vacancy_text),
+            candidate_id=str(candidate_id)
         )
         
         match_results.append(match_result)

@@ -66,8 +66,8 @@ async def match(request: MatchRequest):
     Match a candidate with vacancies using the LangGraph orchestrator.
     
     The orchestrator:
-    1. Fetches the candidate's embedding from Pinecone (based on their processed CV)
-    2. Searches for vacancies in Pinecone using filter {'type': 'vacancy'}
+    1. Fetches the candidate's embedding from Pinecone namespace "cvs" (based on their processed CV)
+    2. Searches for vacancies in Pinecone namespace "vacancies"
     3. Uses Gemini to rerank results and explain WHY the vacancy fits the candidate
     
     Accepts a JSON payload with:

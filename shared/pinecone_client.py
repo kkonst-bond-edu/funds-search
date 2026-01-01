@@ -1,8 +1,11 @@
 import os
+import logging
 from typing import List, Dict, Any, Optional
 from pinecone import Pinecone
 from shared.schemas import Resume, DocumentChunk, Vacancy
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 class VectorStore:
     def __init__(self):
@@ -13,7 +16,18 @@ class VectorStore:
         self.index_name = os.getenv("PINECONE_INDEX_NAME", "funds-search")
         self.index = self.pc.Index(self.index_name)
 
-    def upsert_resume(self, resume: Resume):
+    def upsert(self, vectors: List[Dict[str, Any]], namespace: str = "resumes"):
+        """
+        Generic upsert method that accepts vectors and namespace.
+        
+        Args:
+            vectors: List of vector dictionaries with 'id', 'values', and 'metadata'
+            namespace: Namespace to use (default: "resumes")
+        """
+        logger.info(f"Upserting {len(vectors)} vectors to namespace: {namespace}")
+        self.index.upsert(vectors=vectors, namespace=namespace)
+    
+    def upsert_resume(self, resume: Resume, namespace: str = "cvs"):
         """Сохраняет все чанки резюме в Pinecone."""
         vectors = []
         for i, chunk in enumerate(resume.chunks):
@@ -28,10 +42,10 @@ class VectorStore:
                 }
             })
         
-        # Pinecone рекомендует загружать пачками (batching)
-        self.index.upsert(vectors=vectors, namespace="resumes")
+        logger.info(f"Upserting resume {resume.id} for user {resume.user_id} to namespace: {namespace}")
+        self.upsert(vectors=vectors, namespace=namespace)
 
-    def upsert_vacancy(self, vacancy: Vacancy):
+    def upsert_vacancy(self, vacancy: Vacancy, namespace: str = "vacancies"):
         """Сохраняет все чанки вакансии в Pinecone с metadata type='vacancy'."""
         vectors = []
         for i, chunk in enumerate(vacancy.chunks):
@@ -45,103 +59,125 @@ class VectorStore:
                 }
             })
         
-        # Pinecone рекомендует загружать пачками (batching)
-        self.index.upsert(vectors=vectors, namespace="resumes")
+        logger.info(f"Upserting vacancy {vacancy.id} to namespace: {namespace}")
+        self.upsert(vectors=vectors, namespace=namespace)
 
-    def get_candidate_embedding(self, candidate_id: str) -> Optional[List[float]]:
+    def query(self, query_vector: List[float], top_k: int = 10, filter_dict: Optional[Dict[str, Any]] = None, namespace: str = "resumes", include_values: bool = False) -> List[Dict[str, Any]]:
+        """
+        Generic query method that accepts namespace parameter.
+        
+        Args:
+            query_vector: Query embedding vector
+            top_k: Number of results to return
+            filter_dict: Optional metadata filter
+            namespace: Namespace to query (default: "resumes")
+            include_values: Whether to include vector values in results (default: False)
+            
+        Returns:
+            List of dictionaries with 'id', 'metadata', 'score', and optionally 'values'
+        """
+        logger.info(f"Querying namespace: {namespace} with top_k={top_k}, filter={filter_dict}, include_values={include_values}")
+        query_result = self.index.query(
+            vector=query_vector,
+            top_k=top_k,
+            include_metadata=True,
+            include_values=include_values,
+            filter=filter_dict if filter_dict else None,
+            namespace=namespace
+        )
+        
+        # Convert Pinecone query result to list of dicts with metadata and score
+        results = []
+        for match in query_result.matches:
+            result_dict = {
+                "id": match.id,
+                "metadata": match.metadata or {},
+                "score": match.score or 0.0
+            }
+            if include_values and hasattr(match, 'values'):
+                result_dict["values"] = match.values
+            results.append(result_dict)
+        logger.info(f"Query returned {len(results)} results from namespace: {namespace}")
+        return results
+    
+    def get_candidate_embedding(self, candidate_id: str, namespace: str = "cvs") -> Optional[List[float]]:
         """
         Получает эмбеддинг кандидата из Pinecone.
-        Извлекает все чанки резюме кандидата и возвращает средний эмбеддинг.
+        Извлекает 'values' из первого совпадения (first match).
         
         Args:
             candidate_id: user_id кандидата
+            namespace: Namespace to query (default: "cvs")
             
         Returns:
-            Средний эмбеддинг всех чанков резюме или None, если кандидат не найден
+            Эмбеддинг из первого совпадения или None, если кандидат не найден
         """
         # BGE-M3 uses 1024 dimensions
         EMBEDDING_DIM = 1024
         
+        logger.info(f"Fetching candidate embedding for {candidate_id} from namespace: {namespace}")
+        
         # Ищем все векторы с user_id = candidate_id
         # Используем dummy vector для query (фильтр сделает основную работу)
+        # CRITICAL: include_values=True to get the embedding values
         query_result = self.index.query(
             vector=[0.0] * EMBEDDING_DIM,  # Dummy vector для BGE-M3 (1024 dims)
-            top_k=10000,  # Большое число, чтобы получить все чанки
+            top_k=1,  # Get only the first match
             include_metadata=True,
+            include_values=True,  # CRITICAL: Include values to get embedding
             filter={"user_id": {"$eq": candidate_id}},
-            namespace="resumes"
+            namespace=namespace
         )
         
         if not query_result.matches:
+            logger.warning(f"No matches found for candidate {candidate_id} in namespace: {namespace}")
             return None
         
-        # Извлекаем IDs для fetch
-        vector_ids = [match.id for match in query_result.matches]
-        if not vector_ids:
+        # Extract 'values' from the first match
+        first_match = query_result.matches[0]
+        if not hasattr(first_match, 'values') or first_match.values is None:
+            logger.warning(f"First match for candidate {candidate_id} does not have values")
             return None
         
-        # Fetch vectors by IDs to get actual embedding values
-        fetch_result = self.index.fetch(ids=vector_ids, namespace="resumes")
+        # Get the embedding values from the first match
+        candidate_embedding = first_match.values
         
-        embeddings = []
-        for vector_id, vector_data in fetch_result.vectors.items():
-            if 'values' in vector_data:
-                embeddings.append(vector_data['values'])
-        
-        if not embeddings:
-            return None
-        
-        # Вычисляем средний эмбеддинг и нормализуем
-        avg_embedding = np.mean(embeddings, axis=0)
-        # Нормализуем для cosine similarity
-        norm = np.linalg.norm(avg_embedding)
+        # Normalize for cosine similarity
+        embedding_array = np.array(candidate_embedding)
+        norm = np.linalg.norm(embedding_array)
         if norm > 0:
-            avg_embedding = avg_embedding / norm
-        return avg_embedding.tolist()
+            embedding_array = embedding_array / norm
+        
+        logger.info(f"Extracted embedding for candidate {candidate_id} from first match (dim={len(embedding_array)})")
+        return embedding_array.tolist()
 
-    def search_vacancies(self, query_vector: List[float], top_k: int = 10) -> List[Dict[str, Any]]:
+    def search_vacancies(self, query_vector: List[float], top_k: int = 10, namespace: str = "vacancies") -> List[Dict[str, Any]]:
         """
-        Ищет вакансии в Pinecone с фильтром type='vacancy'.
+        Ищет вакансии в Pinecone.
         
         Args:
             query_vector: Вектор запроса для поиска
             top_k: Количество топ результатов
+            namespace: Namespace to query (default: "vacancies")
             
         Returns:
             Список словарей с metadata и score
         """
-        query_result = self.index.query(
-            vector=query_vector,
+        logger.info(f"Searching vacancies in namespace: {namespace} with top_k={top_k}")
+        return self.query(
+            query_vector=query_vector,
             top_k=top_k,
-            include_metadata=True,
-            filter={"type": {"$eq": "vacancy"}},
-            namespace="resumes"
+            filter_dict=None,  # No filter needed if using separate namespace
+            namespace=namespace
         )
-        
-        # Convert Pinecone query result to list of dicts with metadata and score
-        results = []
-        for match in query_result.matches:
-            results.append({
-                "id": match.id,
-                "metadata": match.metadata or {},
-                "score": match.score or 0.0
-            })
-        return results
 
-    def search_similar(self, query_vector: List[float], top_k: int = 5, filter_dict: Optional[Dict[str, Any]] = None):
+    def search_similar(self, query_vector: List[float], top_k: int = 5, filter_dict: Optional[Dict[str, Any]] = None, namespace: str = "resumes"):
         """Поиск похожих документов."""
-        query_result = self.index.query(
-            vector=query_vector,
+        results = self.query(
+            query_vector=query_vector,
             top_k=top_k,
-            include_metadata=True,
-            filter=filter_dict if filter_dict else None,
-            namespace="resumes"
+            filter_dict=filter_dict,
+            namespace=namespace
         )
-        # Convert Pinecone query result to list of dicts with metadata and score
-        results = []
-        for match in query_result.matches:
-            results.append({
-                "metadata": match.metadata or {},
-                "score": match.score or 0.0
-            })
-        return results
+        # Return results without 'id' field for backward compatibility
+        return [{"metadata": r["metadata"], "score": r["score"]} for r in results]

@@ -64,8 +64,8 @@ async def process_cv(user_id: str, file: UploadFile = File(...)):
             chunks=doc_chunks
         )
 
-        # 6. Сохраняем в Pinecone
-        vector_store.upsert_resume(resume)
+        # 6. Сохраняем в Pinecone в namespace "cvs"
+        vector_store.upsert_resume(resume, namespace="cvs")
 
         return {"status": "success", "resume_id": resume.id, "chunks_processed": len(doc_chunks)}
 
@@ -76,6 +76,7 @@ async def process_cv(user_id: str, file: UploadFile = File(...)):
 
 class VacancyRequest(BaseModel):
     """Request schema for processing a vacancy."""
+    vacancy_id: str = Field(..., description="Unique identifier for the vacancy")
     text: str = Field(..., description="Text description of the vacancy")
 
 
@@ -85,11 +86,12 @@ async def process_vacancy(request: VacancyRequest):
     Process a vacancy description: embed it and save to Pinecone with metadata {'type': 'vacancy'}.
     
     Args:
-        request: VacancyRequest containing the text description
+        request: VacancyRequest containing vacancy_id and text description
         
     Returns:
         Dictionary with status, vacancy_id, and chunks_processed
     """
+    vacancy_id = request.vacancy_id
     vacancy_text = request.text
     
     # 1. Разбиваем на чанки (упрощенно)
@@ -110,13 +112,13 @@ async def process_vacancy(request: VacancyRequest):
     ]
     
     vacancy = Vacancy(
-        id=str(uuid.uuid4()),
+        id=vacancy_id,
         raw_text=vacancy_text,
         chunks=doc_chunks
     )
     
-    # 4. Сохраняем в Pinecone
-    vector_store.upsert_vacancy(vacancy)
+    # 4. Сохраняем в Pinecone в namespace "vacancies"
+    vector_store.upsert_vacancy(vacancy, namespace="vacancies")
     
     return {
         "status": "success", 
