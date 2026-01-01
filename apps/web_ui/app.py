@@ -11,9 +11,10 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import logging
 import uuid
+import time
 import httpx
 import streamlit as st
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from shared.schemas import VacancyMatchResult
 
 # Configure logging
@@ -27,6 +28,11 @@ logger = logging.getLogger(__name__)
 # Note: cv-processor listens on port 8001 internally (8002 is the external host mapping)
 BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://api:8000")
 CV_PROCESSOR_URL = os.getenv("CV_PROCESSOR_URL", "http://cv-processor:8001")
+
+# Retry configuration for cold start handling
+MAX_RETRIES = 3
+RETRY_DELAY = 2  # seconds
+TIMEOUT = 120.0  # seconds
 
 # Page configuration
 st.set_page_config(
@@ -70,6 +76,97 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+def check_service_health(service_url: str, service_name: str, timeout: float = 5.0) -> Tuple[bool, str]:
+    """
+    Check if a service is healthy and responding.
+    
+    Args:
+        service_url: Base URL of the service
+        service_name: Name of the service for logging
+        timeout: Request timeout in seconds
+        
+    Returns:
+        Tuple of (is_healthy: bool, message: str)
+    """
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.get(f"{service_url}/health")
+            if response.status_code == 200:
+                return True, "Online"
+            else:
+                return False, f"Unhealthy (HTTP {response.status_code})"
+    except httpx.TimeoutException:
+        return False, "Timeout (may be starting up)"
+    except httpx.ConnectError:
+        return False, "Connection refused (may be starting up)"
+    except Exception as e:
+        logger.warning(f"Health check error for {service_name}: {str(e)}")
+        return False, f"Error: {str(e)[:50]}"
+
+
+def make_request_with_retry(
+    method: str,
+    url: str,
+    max_retries: int = MAX_RETRIES,
+    retry_delay: float = RETRY_DELAY,
+    **kwargs
+) -> httpx.Response:
+    """
+    Make an HTTP request with retry logic for handling cold starts.
+    
+    Args:
+        method: HTTP method (GET, POST, etc.)
+        url: Request URL
+        max_retries: Maximum number of retry attempts
+        retry_delay: Initial delay between retries (exponential backoff)
+        **kwargs: Additional arguments to pass to httpx request
+        
+    Returns:
+        httpx.Response object
+        
+    Raises:
+        Exception: If all retries fail
+    """
+    last_exception = None
+    
+    for attempt in range(max_retries):
+        try:
+            with httpx.Client(timeout=TIMEOUT) as client:
+                if method.upper() == "GET":
+                    response = client.get(url, **kwargs)
+                elif method.upper() == "POST":
+                    response = client.post(url, **kwargs)
+                else:
+                    raise ValueError(f"Unsupported HTTP method: {method}")
+                
+                # If we get a response (even error status), return it
+                # Only retry on connection/timeout errors
+                return response
+                
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as e:
+            last_exception = e
+            if attempt < max_retries - 1:
+                wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                logger.warning(
+                    f"Request to {url} failed (attempt {attempt + 1}/{max_retries}): {str(e)}. "
+                    f"Retrying in {wait_time}s..."
+                )
+                time.sleep(wait_time)
+            else:
+                logger.error(f"All {max_retries} retry attempts failed for {url}")
+                raise Exception(
+                    f"Service unavailable after {max_retries} attempts. "
+                    f"The service may be starting up (cold start). Last error: {str(e)}"
+                )
+        except Exception as e:
+            # For other exceptions, don't retry
+            logger.error(f"Non-retryable error for {url}: {str(e)}")
+            raise
+    
+    # Should not reach here, but just in case
+    raise Exception(f"Request failed after {max_retries} attempts: {str(last_exception)}")
+
+
 def process_cv_upload(file, user_id: str) -> dict:
     """
     Upload and process a CV file.
@@ -82,22 +179,28 @@ def process_cv_upload(file, user_id: str) -> dict:
         Response dictionary with status and resume_id
     """
     try:
-        with httpx.Client(timeout=120.0) as client:
-            files = {"file": (file.name, file.read(), "application/pdf")}
-            params = {"user_id": user_id}
-            response = client.post(
-                f"{CV_PROCESSOR_URL}/process-cv",
-                files=files,
-                params=params
-            )
-            response.raise_for_status()
-            return response.json()
+        files = {"file": (file.name, file.read(), "application/pdf")}
+        params = {"user_id": user_id}
+        response = make_request_with_retry(
+            "POST",
+            f"{CV_PROCESSOR_URL}/process-cv",
+            files=files,
+            params=params
+        )
+        response.raise_for_status()
+        return response.json()
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error processing CV: {e.response.status_code} - {e.response.text}")
         raise Exception(f"Failed to process CV: {e.response.status_code} - {e.response.text}")
     except Exception as e:
         logger.error(f"Error processing CV: {str(e)}")
-        raise Exception(f"Error processing CV: {str(e)}")
+        error_msg = str(e)
+        if "cold start" in error_msg.lower() or "starting up" in error_msg.lower():
+            raise Exception(
+                f"CV Processor service is starting up. Please wait a moment and try again. "
+                f"Error: {error_msg}"
+            )
+        raise Exception(f"Error processing CV: {error_msg}")
 
 
 def process_vacancy(vacancy_text: str, vacancy_id: Optional[str] = None) -> dict:
@@ -115,22 +218,28 @@ def process_vacancy(vacancy_text: str, vacancy_id: Optional[str] = None) -> dict
         vacancy_id = str(uuid.uuid4())
     
     try:
-        with httpx.Client(timeout=120.0) as client:
-            response = client.post(
-                f"{CV_PROCESSOR_URL}/process-vacancy",
-                json={
-                    "vacancy_id": vacancy_id,
-                    "text": vacancy_text
-                }
-            )
-            response.raise_for_status()
-            return response.json()
+        response = make_request_with_retry(
+            "POST",
+            f"{CV_PROCESSOR_URL}/process-vacancy",
+            json={
+                "vacancy_id": vacancy_id,
+                "text": vacancy_text
+            }
+        )
+        response.raise_for_status()
+        return response.json()
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error processing vacancy: {e.response.status_code} - {e.response.text}")
         raise Exception(f"Failed to process vacancy: {e.response.status_code} - {e.response.text}")
     except Exception as e:
         logger.error(f"Error processing vacancy: {str(e)}")
-        raise Exception(f"Error processing vacancy: {str(e)}")
+        error_msg = str(e)
+        if "cold start" in error_msg.lower() or "starting up" in error_msg.lower():
+            raise Exception(
+                f"CV Processor service is starting up. Please wait a moment and try again. "
+                f"Error: {error_msg}"
+            )
+        raise Exception(f"Error processing vacancy: {error_msg}")
 
 
 def get_matches(candidate_id: str, top_k: int = 10) -> List[VacancyMatchResult]:
@@ -145,18 +254,18 @@ def get_matches(candidate_id: str, top_k: int = 10) -> List[VacancyMatchResult]:
         List of VacancyMatchResult objects
     """
     try:
-        with httpx.Client(timeout=120.0) as client:
-            response = client.post(
-                f"{BACKEND_API_URL}/match",
-                json={
-                    "candidate_id": candidate_id,
-                    "top_k": top_k
-                }
-            )
-            response.raise_for_status()
-            results = response.json()
-            # Parse results into VacancyMatchResult objects
-            return [VacancyMatchResult(**result) for result in results]
+        response = make_request_with_retry(
+            "POST",
+            f"{BACKEND_API_URL}/match",
+            json={
+                "candidate_id": candidate_id,
+                "top_k": top_k
+            }
+        )
+        response.raise_for_status()
+        results = response.json()
+        # Parse results into VacancyMatchResult objects
+        return [VacancyMatchResult(**result) for result in results]
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error getting matches: {e.response.status_code} - {e.response.text}")
         if e.response.status_code == 404:
@@ -164,7 +273,13 @@ def get_matches(candidate_id: str, top_k: int = 10) -> List[VacancyMatchResult]:
         raise Exception(f"Failed to get matches: {e.response.status_code} - {e.response.text}")
     except Exception as e:
         logger.error(f"Error getting matches: {str(e)}")
-        raise Exception(f"Error getting matches: {str(e)}")
+        error_msg = str(e)
+        if "cold start" in error_msg.lower() or "starting up" in error_msg.lower():
+            raise Exception(
+                f"API service is starting up. Please wait a moment and try again. "
+                f"Error: {error_msg}"
+            )
+        raise Exception(f"Error getting matches: {error_msg}")
 
 
 def display_match_result(match: VacancyMatchResult, index: int):
@@ -218,16 +333,30 @@ with st.sidebar:
     st.header("Configuration")
     st.info(f"**API URL:** {BACKEND_API_URL}\n\n**CV Processor URL:** {CV_PROCESSOR_URL}")
     
-    # Health check
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            api_health = client.get(f"{BACKEND_API_URL}/health")
-            if api_health.status_code == 200:
-                st.success("✅ API Service: Online")
-            else:
-                st.error("❌ API Service: Offline")
-    except Exception as e:
-        st.error(f"❌ API Service: {str(e)}")
+    st.markdown("---")
+    st.subheader("Service Health")
+    
+    # Health check for API service
+    api_healthy, api_message = check_service_health(BACKEND_API_URL, "API")
+    if api_healthy:
+        st.success(f"✅ **API Service:** {api_message}")
+    else:
+        st.warning(f"⚠️ **API Service:** {api_message}")
+        if "starting up" in api_message.lower():
+            st.caption("💡 Service may be waking from cold start. Wait a moment and refresh.")
+    
+    # Health check for CV Processor service
+    cv_healthy, cv_message = check_service_health(CV_PROCESSOR_URL, "CV Processor")
+    if cv_healthy:
+        st.success(f"✅ **CV Processor:** {cv_message}")
+    else:
+        st.warning(f"⚠️ **CV Processor:** {cv_message}")
+        if "starting up" in cv_message.lower():
+            st.caption("💡 Service may be waking from cold start. Wait a moment and refresh.")
+    
+    # Refresh button
+    if st.button("🔄 Refresh Health Status", use_container_width=True):
+        st.rerun()
 
 # Main content tabs
 tab1, tab2, tab3 = st.tabs(["📄 Upload CV", "💼 Process Vacancy", "🎯 Find Matches"])
