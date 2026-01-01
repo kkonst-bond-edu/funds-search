@@ -52,3 +52,19 @@ services:
       - ./services:/app/services
       - ./shared:/app/shared
 
+  web-ui:
+    build:
+      context: .
+      dockerfile: apps/web_ui/Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_API_URL=http://api:8000
+      - CV_PROCESSOR_URL=http://cv-processor:8001
+    depends_on:
+      - api
+      - cv-processor
+    volumes:
+      - ./apps:/app/apps
+      - ./shared:/app/shared
+
