@@ -25,6 +25,12 @@ app.add_middleware(
 )
 
 
+@app.get("/")
+async def root():
+    """Root endpoint for health checks."""
+    return {"status": "ok"}
+
+
 @app.get("/health")
 async def health():
     """Health check endpoint."""

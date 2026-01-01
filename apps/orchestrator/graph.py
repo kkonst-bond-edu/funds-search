@@ -2,6 +2,7 @@
 LangGraph orchestrator for funds-search matching.
 Implements a state machine with Retrieval and Analysis nodes.
 """
+import logging
 from typing import TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -10,6 +11,8 @@ import httpx
 import os
 from shared.schemas import Job, MatchResult, SearchRequest, VacancyMatchResult, MatchRequest
 from shared.pinecone_client import VectorStore
+
+logger = logging.getLogger(__name__)
 
 
 class OrchestratorState(TypedDict):
@@ -35,7 +38,17 @@ def get_pinecone_client() -> VectorStore:
     """Get or create Pinecone client instance."""
     global pinecone_client
     if pinecone_client is None:
-        pinecone_client = VectorStore()
+        try:
+            logger.info("Initializing Pinecone client...")
+            pinecone_client = VectorStore()
+            logger.info("Pinecone client initialized successfully")
+        except ValueError as e:
+            logger.error(f"Failed to initialize Pinecone client: {str(e)}")
+            logger.error("Please check that PINECONE_API_KEY environment variable is set")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error initializing Pinecone client: {str(e)}")
+            raise
     return pinecone_client
 
 
@@ -43,13 +56,25 @@ def get_llm() -> ChatGoogleGenerativeAI:
     """Get or create LLM instance."""
     global llm
     if llm is None:
-        google_api_key = os.getenv("GOOGLE_API_KEY", "")
-        if not google_api_key:
-            raise ValueError("GOOGLE_API_KEY environment variable is required")
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-pro",
-            google_api_key=google_api_key
-        )
+        try:
+            logger.info("Initializing Gemini LLM client...")
+            google_api_key = os.getenv("GOOGLE_API_KEY", "")
+            if not google_api_key:
+                logger.error("GOOGLE_API_KEY environment variable is not set")
+                raise ValueError("GOOGLE_API_KEY environment variable is required")
+            logger.info("GOOGLE_API_KEY found, creating ChatGoogleGenerativeAI instance...")
+            llm = ChatGoogleGenerativeAI(
+                model="gemini-pro",
+                google_api_key=google_api_key
+            )
+            logger.info("Gemini LLM client initialized successfully")
+        except ValueError as e:
+            logger.error(f"Failed to initialize LLM client: {str(e)}")
+            logger.error("Please check that GOOGLE_API_KEY environment variable is set")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error initializing LLM client: {str(e)}")
+            raise
     return llm
 
 # System prompt for Gemini agent
