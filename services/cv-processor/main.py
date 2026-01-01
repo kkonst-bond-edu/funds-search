@@ -21,7 +21,7 @@ EMBEDDING_SERVICE_URL = os.getenv("EMBEDDING_SERVICE_URL", "http://embedding-ser
 
 async def get_embeddings(texts: List[str]) -> List[List[float]]:
     """Вызов вашего сервиса на Azure."""
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=300.0) as client:  # 5 minutes timeout for embedding generation
         try:
             response = await client.post(
                 f"{EMBEDDING_SERVICE_URL}/embed",

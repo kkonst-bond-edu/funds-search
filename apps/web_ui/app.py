@@ -32,7 +32,7 @@ CV_PROCESSOR_URL = os.getenv("CV_PROCESSOR_URL", "http://cv-processor:8001")
 # Retry configuration for cold start handling
 MAX_RETRIES = 3
 RETRY_DELAY = 2  # seconds
-TIMEOUT = 120.0  # seconds
+TIMEOUT = 300.0  # seconds (5 minutes) - increased for CV processing and matching operations
 
 # Page configuration
 st.set_page_config(
