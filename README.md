@@ -4,7 +4,7 @@ Production-ready candidate-vacancy matching system using LangGraph orchestration
 
 ## Overview
 
-Multi-Agent RAG architecture that processes CVs/vacancies, generates embeddings, stores vectors in Pinecone, and matches candidates using semantic similarity + AI analysis.
+Multi-Agent RAG architecture that processes CVs/vacancies, generates embeddings, stores vectors in Pinecone, and matches candidates using semantic similarity + AI analysis. The system supports both job search queries and candidate-vacancy matching with AI-powered explanations.
 
 ## System Architecture
 
@@ -56,7 +56,7 @@ graph TB
 
 ## Data Schemas
 
-All schemas defined in `shared/schemas.py` (Pydantic v2, single source of truth):
+All schemas in `shared/schemas.py` (Pydantic v2, single source of truth):
 
 ### Core Models
 
@@ -64,7 +64,7 @@ All schemas defined in `shared/schemas.py` (Pydantic v2, single source of truth)
 ```python
 {
   "text": str,              # Chunk content
-  "metadata": Dict,         # Additional metadata
+  "metadata": Dict,         # Additional metadata (type: 'cv' | 'vacancy')
   "embedding": List[float]  # 1024-dim BGE-M3 vector
 }
 ```
@@ -75,7 +75,7 @@ All schemas defined in `shared/schemas.py` (Pydantic v2, single source of truth)
   "id": str,                    # Unique resume ID
   "user_id": str,               # Candidate identifier
   "raw_text": str,              # Full CV text
-  "chunks": List[DocumentChunk], # Processed chunks
+  "chunks": List[DocumentChunk], # Processed chunks (type: 'cv')
   "processed_at": datetime,
   "created_at": datetime
 }
@@ -86,7 +86,7 @@ All schemas defined in `shared/schemas.py` (Pydantic v2, single source of truth)
 {
   "id": str,                    # Unique vacancy ID
   "raw_text": str,              # Full job description
-  "chunks": List[DocumentChunk], # Processed chunks
+  "chunks": List[DocumentChunk], # Processed chunks (type: 'vacancy')
   "processed_at": datetime,
   "created_at": datetime
 }
@@ -161,20 +161,20 @@ All schemas defined in `shared/schemas.py` (Pydantic v2, single source of truth)
 
 ## Tech Stack
 
-- **Orchestration**: LangGraph state machines
-- **LLM**: Google Gemini 2.5 Flash (reasoning)
+- **Orchestration**: LangGraph state machines (search & matching workflows)
+- **LLM**: Google Gemini 2.5 Flash (reasoning & reranking)
 - **Embeddings**: BAAI/bge-m3 (1024-dim)
-- **Vector DB**: Pinecone (namespaces: `cvs`, `vacancies`)
+- **Vector DB**: Pinecone (namespaces: `cvs`, `vacancies`; metadata filter: `type`)
 - **API**: FastAPI/Uvicorn
 - **UI**: Streamlit
-- **Document Parser**: Docling (PDF→Markdown)
+- **Document Parser**: Docling (PDF→Markdown, async via `run_in_threadpool`)
 - **Deployment**: Docker, Azure Container Apps
 
 ## Quick Start
 
 ### Prerequisites
 - Docker & Docker Compose
-- `.env` file with:
+- `.env` file:
   ```bash
   PINECONE_API_KEY=your_key
   PINECONE_INDEX_NAME=funds-search
@@ -253,9 +253,26 @@ sequenceDiagram
     C->>C: Chunk (1000 chars, 800 overlap)
     C->>E: POST /embed
     E-->>C: Embeddings (1024-dim)
-    C->>P: Store vectors (namespace: "cvs")
+    C->>P: Store vectors (namespace: "cvs", type: "cv")
     C-->>W: Success
     W-->>U: CV Processed
+```
+
+### Vacancy Processing Pipeline
+
+```mermaid
+sequenceDiagram
+    participant Admin
+    participant C as CV Processor
+    participant E as Embedding Service
+    participant P as Pinecone
+    
+    Admin->>C: POST /process-vacancy {text}
+    C->>C: Chunk (1000 chars, 800 overlap)
+    C->>E: POST /embed
+    E-->>C: Embeddings (1024-dim)
+    C->>P: Store vectors (namespace: "vacancies", type: "vacancy")
+    C-->>Admin: Success
 ```
 
 ### Matching Pipeline
@@ -274,17 +291,28 @@ sequenceDiagram
     A->>O: Run matching graph
     O->>R: Fetch candidate embedding
     R->>P: Get from "cvs" namespace
-    P-->>R: Candidate vector
-    R->>P: Search "vacancies" namespace
-    P-->>R: Top K vacancies
+    P-->>R: Candidate vector (avg of chunks)
+    R->>P: Search "vacancies" namespace (filter: type='vacancy')
+    P-->>R: Top K vacancies + scores
     R-->>O: Retrieved results
     O->>An: Analyze matches
-    An->>G: Generate reasoning
+    An->>G: Generate reasoning (why vacancy fits)
     G-->>An: AI explanations
     An-->>O: Match results
     O-->>A: List[VacancyMatchResult]
-    A-->>U: Ranked matches + scores
+    A-->>U: Ranked matches + scores + reasoning
 ```
+
+## Orchestration Workflows
+
+### Search Workflow
+1. **Retrieval Node**: Embed query → Search Pinecone → Get top 10 jobs
+2. **Analysis Node**: Gemini analyzes each match → Generate reasoning → Return ranked results
+
+### Matching Workflow
+1. **Fetch Candidate Node**: Get candidate embedding from Pinecone (avg of CV chunks)
+2. **Search Vacancies Node**: Vector search in "vacancies" namespace (filter: `type='vacancy'`)
+3. **Rerank & Explain Node**: Gemini generates detailed reasoning for each match
 
 ## Deployment
 
@@ -324,17 +352,11 @@ funds-search/
 │   ├── schemas.py        # Pydantic v2 models (SSOT)
 │   └── pinecone_client.py # Vector DB wrapper
 ├── requirements/         # Dependency management
-│   ├── base.txt         # Common deps
-│   ├── ml.txt           # ML (torch, transformers)
-│   └── api.txt          # API (no ML)
-└── .github/workflows/   # CI/CD (Azure deployments)
+│   ├── base.txt       # Common deps
+│   ├── ml.txt         # ML (torch, transformers)
+│   └── api.txt        # API (no ML)
+└── .github/workflows/ # CI/CD (Azure deployments)
 ```
-
-## Documentation
-
-- **[Services README](services/README.md)** - Microservices architecture
-- **[Apps README](apps/README.md)** - Application components
-- **[Shared README](shared/README.md)** - Shared modules
 
 ## Key Implementation Details
 
@@ -344,11 +366,15 @@ funds-search/
 | **Ports** | CV Processor: 8002 (external) → 8001 (internal) |
 | **CV Processing** | `run_in_threadpool` for Docling (non-blocking async) |
 | **Image Size** | API: multi-stage build (4GB → <500MB) |
-| **Pinecone** | Namespaces: `"cvs"` (resumes), `"vacancies"` (jobs) |
+| **Pinecone** | Namespaces: `"cvs"` (resumes), `"vacancies"` (jobs)<br/>Metadata filter: `type: 'cv'` or `type: 'vacancy'` |
 | **Chunking** | 1000 chars, 800 overlap |
 | **Embeddings** | BGE-M3 (1024 dimensions) |
 | **LLM** | Gemini 2.5 Flash (reasoning & reranking) |
+| **Candidate Embedding** | Average of all CV chunks, normalized |
+| **Vector Search** | Cosine similarity with metadata filters |
 
-## License
+## Documentation
 
-See LICENSE file for details.
+- **[Services README](services/README.md)** - Microservices architecture
+- **[Apps README](apps/README.md)** - Application components
+- **[Shared README](shared/README.md)** - Shared modules
