@@ -26,7 +26,7 @@ class OrchestratorState(TypedDict):
 
 
 # Initialize services (lazy initialization)
-embedding_service_url = os.getenv("EMBEDDING_SERVICE_URL", "http://localhost:8001")
+embedding_service_url = os.getenv("EMBEDDING_SERVICE_URL", "http://embedding-service:8001")
 pinecone_client = None
 llm = None
 
@@ -43,9 +43,12 @@ def get_llm() -> ChatGoogleGenerativeAI:
     """Get or create LLM instance."""
     global llm
     if llm is None:
+        google_api_key = os.getenv("GOOGLE_API_KEY", "")
+        if not google_api_key:
+            raise ValueError("GOOGLE_API_KEY environment variable is required")
         llm = ChatGoogleGenerativeAI(
             model="gemini-pro",
-            google_api_key=os.getenv("GOOGLE_API_KEY")
+            google_api_key=google_api_key
         )
     return llm
 

@@ -4,7 +4,6 @@ Uses Docling for URL parsing and content extraction.
 """
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Optional
 from docling.document_converter import DocumentConverter
 from docling.datamodel.base_models import InputFormat
 import httpx

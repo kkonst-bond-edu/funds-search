@@ -5,8 +5,11 @@ from shared.schemas import Resume, DocumentChunk
 
 class VectorStore:
     def __init__(self):
-        self.pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-        self.index_name = os.getenv("PINECONE_INDEX_NAME")
+        api_key = os.getenv("PINECONE_API_KEY", "")
+        if not api_key:
+            raise ValueError("PINECONE_API_KEY environment variable is required")
+        self.pc = Pinecone(api_key=api_key)
+        self.index_name = os.getenv("PINECONE_INDEX_NAME", "funds-search")
         self.index = self.pc.Index(self.index_name)
 
     def upsert_resume(self, resume: Resume):
