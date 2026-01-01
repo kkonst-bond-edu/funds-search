@@ -64,7 +64,7 @@ def get_llm() -> ChatGoogleGenerativeAI:
                 raise ValueError("GOOGLE_API_KEY environment variable is required")
             logger.info("GOOGLE_API_KEY found, creating ChatGoogleGenerativeAI instance...")
             llm = ChatGoogleGenerativeAI(
-                model="gemini-pro",
+                model="gemini-2.5-flash",
                 google_api_key=google_api_key
             )
             logger.info("Gemini LLM client initialized successfully")
