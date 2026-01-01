@@ -1,0 +1,13 @@
+# Machine Learning requirements
+# Heavy dependencies: torch, transformers, docling
+# Used by: embedding-service, cv-processor
+
+# Include base requirements
+-r base.txt
+
+# ML-specific dependencies
+torch>=2.2.0
+transformers>=4.40.0
+docling>=2.0.0
+sentencepiece
+

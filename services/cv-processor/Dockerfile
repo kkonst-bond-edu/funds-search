@@ -22,6 +22,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Копируем весь проект
 COPY . .
 
+# Set PYTHONPATH so Python can find shared and services modules
+ENV PYTHONPATH=/app
+
 EXPOSE 8001
 
 # ГАРАНТИРОВАННЫЙ способ запуска через модуль

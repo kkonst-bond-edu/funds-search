@@ -384,15 +384,42 @@ with tab1:
         elif not uploaded_file:
             st.error("Please upload a PDF file")
         else:
-            with st.spinner("Processing CV... This may take a minute."):
-                try:
-                    result = process_cv_upload(uploaded_file, user_id)
-                    st.success(f"✅ CV processed successfully!")
-                    st.json(result)
-                    st.info(f"**Resume ID:** {result.get('resume_id')}\n\n**Chunks Processed:** {result.get('chunks_processed')}")
-                except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
-                    logger.error(f"CV processing error: {str(e)}")
+            # Progress bar for CV processing
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            try:
+                status_text.text("📤 Uploading CV file...")
+                progress_bar.progress(10)
+                
+                status_text.text("🔄 Converting PDF to text...")
+                progress_bar.progress(30)
+                
+                status_text.text("🧠 Generating embeddings...")
+                progress_bar.progress(50)
+                
+                status_text.text("💾 Saving to database...")
+                progress_bar.progress(70)
+                
+                result = process_cv_upload(uploaded_file, user_id)
+                
+                progress_bar.progress(100)
+                status_text.text("✅ Processing complete!")
+                
+                st.success(f"✅ CV processed successfully!")
+                st.json(result)
+                st.info(f"**Resume ID:** {result.get('resume_id')}\n\n**Chunks Processed:** {result.get('chunks_processed')}")
+                
+                # Clear progress after a moment
+                time.sleep(0.5)
+                progress_bar.empty()
+                status_text.empty()
+                
+            except Exception as e:
+                progress_bar.empty()
+                status_text.empty()
+                st.error(f"❌ Error: {str(e)}")
+                logger.error(f"CV processing error: {str(e)}")
 
 # Tab 2: Process Vacancy
 with tab2:
@@ -416,16 +443,41 @@ with tab2:
         if not vacancy_text.strip():
             st.error("Please enter a vacancy description")
         else:
-            with st.spinner("Processing vacancy... This may take a minute."):
-                try:
-                    vacancy_id = vacancy_id_input.strip() if vacancy_id_input.strip() else None
-                    result = process_vacancy(vacancy_text, vacancy_id)
-                    st.success(f"✅ Vacancy processed successfully!")
-                    st.json(result)
-                    st.info(f"**Vacancy ID:** {result.get('vacancy_id')}\n\n**Chunks Processed:** {result.get('chunks_processed')}")
-                except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
-                    logger.error(f"Vacancy processing error: {str(e)}")
+            # Progress bar for vacancy processing
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            try:
+                vacancy_id = vacancy_id_input.strip() if vacancy_id_input.strip() else None
+                
+                status_text.text("📝 Processing vacancy text...")
+                progress_bar.progress(20)
+                
+                status_text.text("🧠 Generating embeddings...")
+                progress_bar.progress(50)
+                
+                status_text.text("💾 Saving to database...")
+                progress_bar.progress(80)
+                
+                result = process_vacancy(vacancy_text, vacancy_id)
+                
+                progress_bar.progress(100)
+                status_text.text("✅ Processing complete!")
+                
+                st.success(f"✅ Vacancy processed successfully!")
+                st.json(result)
+                st.info(f"**Vacancy ID:** {result.get('vacancy_id')}\n\n**Chunks Processed:** {result.get('chunks_processed')}")
+                
+                # Clear progress after a moment
+                time.sleep(0.5)
+                progress_bar.empty()
+                status_text.empty()
+                
+            except Exception as e:
+                progress_bar.empty()
+                status_text.empty()
+                st.error(f"❌ Error: {str(e)}")
+                logger.error(f"Vacancy processing error: {str(e)}")
 
 # Tab 3: Find Matches
 with tab3:
@@ -454,41 +506,65 @@ with tab3:
         if not candidate_id:
             st.error("Please enter a Candidate ID")
         else:
-            with st.spinner("Finding matches... This may take a minute."):
-                try:
-                    matches = get_matches(candidate_id, top_k)
+            # Progress bar for matching
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            try:
+                status_text.text("🔍 Fetching candidate profile...")
+                progress_bar.progress(20)
+                
+                status_text.text("📊 Searching for matching vacancies...")
+                progress_bar.progress(50)
+                
+                status_text.text("🤖 Analyzing matches with AI...")
+                progress_bar.progress(75)
+                
+                matches = get_matches(candidate_id, top_k)
+                
+                progress_bar.progress(100)
+                status_text.text("✅ Matching complete!")
                     
-                    if not matches:
-                        st.warning("No matches found for this candidate.")
-                    else:
-                        st.success(f"✅ Found {len(matches)} matches!")
-                        st.markdown("---")
-                        
-                        # Display matches
-                        for idx, match in enumerate(matches):
-                            display_match_result(match, idx)
-                        
-                        # Summary statistics
-                        st.markdown("---")
-                        st.subheader("📊 Summary Statistics")
-                        avg_score = sum(m.score for m in matches) / len(matches) * 100
-                        max_score = max(m.score for m in matches) * 100
-                        min_score = min(m.score for m in matches) * 100
-                        
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Average Match", f"{avg_score:.1f}%")
-                        with col2:
-                            st.metric("Best Match", f"{max_score:.1f}%")
-                        with col3:
-                            st.metric("Lowest Match", f"{min_score:.1f}%")
-                        
-                except ValueError as e:
-                    st.error(f"❌ {str(e)}")
-                    st.info("💡 Make sure you've uploaded a CV for this candidate ID first.")
-                except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
-                    logger.error(f"Match finding error: {str(e)}")
+                # Clear progress after a moment
+                time.sleep(0.5)
+                progress_bar.empty()
+                status_text.empty()
+                
+                if not matches:
+                    st.warning("No matches found for this candidate.")
+                else:
+                    st.success(f"✅ Found {len(matches)} matches!")
+                    st.markdown("---")
+                    
+                    # Display matches
+                    for idx, match in enumerate(matches):
+                        display_match_result(match, idx)
+                    
+                    # Summary statistics
+                    st.markdown("---")
+                    st.subheader("📊 Summary Statistics")
+                    avg_score = sum(m.score for m in matches) / len(matches) * 100
+                    max_score = max(m.score for m in matches) * 100
+                    min_score = min(m.score for m in matches) * 100
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Average Match", f"{avg_score:.1f}%")
+                    with col2:
+                        st.metric("Best Match", f"{max_score:.1f}%")
+                    with col3:
+                        st.metric("Lowest Match", f"{min_score:.1f}%")
+                    
+            except ValueError as e:
+                progress_bar.empty()
+                status_text.empty()
+                st.error(f"❌ {str(e)}")
+                st.info("💡 Make sure you've uploaded a CV for this candidate ID first.")
+            except Exception as e:
+                progress_bar.empty()
+                status_text.empty()
+                st.error(f"❌ Error: {str(e)}")
+                logger.error(f"Match finding error: {str(e)}")
 
 # Footer
 st.markdown("---")

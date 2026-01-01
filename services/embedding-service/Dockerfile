@@ -16,6 +16,9 @@ RUN python -c "from transformers import AutoTokenizer, AutoModel; AutoTokenizer.
 # 4. Копируем код
 COPY . .
 
+# Set PYTHONPATH so Python can find shared and services modules
+ENV PYTHONPATH=/app
+
 EXPOSE 8000
 
 CMD ["uvicorn", "services.embedding-service.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -11,6 +11,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
+# Set PYTHONPATH so Python can find shared and services modules
+ENV PYTHONPATH=/app
+
 EXPOSE 8003
 
 CMD ["uvicorn", "services.vc-worker.main:app", "--host", "0.0.0.0", "--port", "8003"]
