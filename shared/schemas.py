@@ -99,3 +99,18 @@ class MatchingReport(BaseModel):
     vacancy_id: Optional[str] = Field(None, description="Associated vacancy ID")
     candidate_id: Optional[str] = Field(None, description="Associated candidate ID")
 
+
+class ServiceDiagnostic(BaseModel):
+    """Service diagnostic result schema."""
+    status: str = Field(..., description="Service status: 'ok', 'error', or 'timeout'")
+    latency: Optional[float] = Field(None, description="Response latency in milliseconds")
+    error: Optional[str] = Field(None, description="Error message if status is 'error'")
+    error_type: Optional[str] = Field(None, description="Error type: '404', 'timeout', 'connection', etc.")
+
+
+class SystemDiagnosticsResponse(BaseModel):
+    """System diagnostics response schema."""
+    status: str = Field(..., description="Overall system status: 'ok', 'error', or 'partial'")
+    services: Dict[str, ServiceDiagnostic] = Field(..., description="Diagnostic results for each service")
+    timestamp: Optional[str] = Field(None, description="Timestamp of the diagnostic check")
+

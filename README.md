@@ -1,5 +1,7 @@
 # Autonomous Job Hunter: Multi-Agent RAG Matching System
 
+**Version: 2.0.0 (MVP)**
+
 Production-ready autonomous job discovery and matching system using LangGraph orchestration, semantic embeddings (BGE-M3), and AI reasoning (Gemini).
 
 ## Project Overview & Goal
@@ -275,6 +277,7 @@ docker-compose up --build
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
+| `/api/v1/system/diagnostics` | GET | System diagnostics (checks all services) |
 | `/search` | POST | Search jobs (returns `List[MatchResult]`) |
 | `/match` | POST | Match candidate→vacancies (returns `List[VacancyMatchResult]`) |
 
@@ -297,7 +300,52 @@ docker-compose up --build
 }
 ```
 
+**`GET /api/v1/system/diagnostics`** - System diagnostics (v2.0.0)
+```bash
+curl http://localhost:8000/api/v1/system/diagnostics
+```
+
+Returns comprehensive health check for all services:
+- CV Processor
+- Embedding Service
+- Pinecone Vector Store
+- LLM Provider (Google Gemini)
+
 **Response Example:**
+```json
+{
+  "status": "ok",
+  "services": {
+    "cv_processor": {
+      "status": "ok",
+      "latency": 45.2,
+      "error": null,
+      "error_type": null
+    },
+    "embedding_service": {
+      "status": "ok",
+      "latency": 12.5,
+      "error": null,
+      "error_type": null
+    },
+    "pinecone": {
+      "status": "ok",
+      "latency": 234.1,
+      "error": null,
+      "error_type": null
+    },
+    "llm_provider": {
+      "status": "ok",
+      "latency": 567.8,
+      "error": null,
+      "error_type": null
+    }
+  },
+  "timestamp": "2024-12-XXT..."
+}
+```
+
+**Match Response Example:**
 ```json
 [
   {

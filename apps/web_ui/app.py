@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # Note: cv-processor listens on port 8001 internally (8002 is the external host mapping)
 BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://api:8000")
 CV_PROCESSOR_URL = os.getenv("CV_PROCESSOR_URL", "http://cv-processor:8001")
+EMBEDDING_SERVICE_URL = os.getenv("EMBEDDING_SERVICE_URL", "http://embedding-service:8001")
 
 # Retry configuration for cold start handling
 MAX_RETRIES = 3
@@ -526,7 +527,7 @@ with st.sidebar:
         st.rerun()
 
 # Main content tabs
-tab1, tab2, tab3, tab4 = st.tabs(["📄 Upload CV", "💼 Process Vacancy", "🎯 Find Matches", "🤖 AI Talent Strategist"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📄 Upload CV", "💼 Process Vacancy", "🎯 Find Matches", "🤖 AI Talent Strategist", "🔧 System Diagnostics"])
 
 # Tab 1: Upload CV
 with tab1:
@@ -796,6 +797,160 @@ with tab4:
         st.session_state.interview_complete = True
         st.success("Interview completed! Your persona will be used for job matching.")
         st.rerun()
+
+# Tab 5: System Diagnostics
+with tab5:
+    st.header("🔧 System Diagnostics")
+    st.markdown("Run a comprehensive health check on all backend services and dependencies.")
+    
+    # Initialize session state for diagnostics
+    if "diagnostics_result" not in st.session_state:
+        st.session_state.diagnostics_result = None
+    if "diagnostics_running" not in st.session_state:
+        st.session_state.diagnostics_running = False
+    
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        st.info("💡 This diagnostic check will test connectivity to all services including CV Processor, Embedding Service, Pinecone Vector Store, and LLM Provider. Services may take a few seconds to wake up from cold start.")
+    
+    with col2:
+        run_diagnostics = st.button("🚀 Run Full System Check", type="primary", use_container_width=True)
+    
+    if run_diagnostics or st.session_state.diagnostics_running:
+        st.session_state.diagnostics_running = True
+        
+        # Show loading state
+        with st.spinner("🔍 Running system diagnostics... Waking up services..."):
+            try:
+                # Make request to diagnostics endpoint
+                with httpx.Client(timeout=60.0) as client:
+                    response = client.get(f"{BACKEND_API_URL}/api/v1/system/diagnostics")
+                    response.raise_for_status()
+                    diagnostics_data = response.json()
+                    st.session_state.diagnostics_result = diagnostics_data
+                    st.session_state.diagnostics_running = False
+            except httpx.HTTPStatusError as e:
+                st.session_state.diagnostics_running = False
+                st.error(f"❌ Failed to get diagnostics: HTTP {e.response.status_code} - {e.response.text}")
+                st.session_state.diagnostics_result = None
+            except Exception as e:
+                st.session_state.diagnostics_running = False
+                st.error(f"❌ Error running diagnostics: {str(e)}")
+                st.session_state.diagnostics_result = None
+    
+    # Display results
+    if st.session_state.diagnostics_result:
+        result = st.session_state.diagnostics_result
+        
+        # Overall status
+        overall_status = result.get("status", "unknown")
+        if overall_status == "ok":
+            st.success("✅ **Overall System Status: All Services Healthy**")
+        elif overall_status == "partial":
+            st.warning("⚠️ **Overall System Status: Partial - Some Services Unavailable**")
+        else:
+            st.error("❌ **Overall System Status: Error - Services Unavailable**")
+        
+        if result.get("timestamp"):
+            st.caption(f"Last checked: {result.get('timestamp')}")
+        
+        st.markdown("---")
+        
+        # Services table
+        st.subheader("Service Details")
+        
+        services = result.get("services", {})
+        
+        # Create a table with service status
+        for service_name, service_data in services.items():
+            # Format service name for display
+            display_name = service_name.replace("_", " ").title()
+            
+            status = service_data.get("status", "unknown")
+            latency = service_data.get("latency")
+            error = service_data.get("error")
+            error_type = service_data.get("error_type")
+            
+            # Status icon and color
+            if status == "ok":
+                status_icon = "✅"
+                status_color = "#28a745"
+            else:
+                status_icon = "❌"
+                status_color = "#dc3545"
+            
+            # Create expandable section for each service
+            with st.expander(f"{status_icon} **{display_name}** - {status.upper()}", expanded=status != "ok"):
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    if latency is not None:
+                        st.metric("Latency", f"{latency} ms")
+                    else:
+                        st.metric("Latency", "N/A")
+                
+                with col2:
+                    if status == "ok":
+                        st.success("Healthy")
+                    else:
+                        st.error("Unhealthy")
+                
+                if error:
+                    st.error(f"**Error:** {error}")
+                    
+                    # Special handling for 404 errors
+                    if error_type == "404":
+                        st.warning("⚠️ **Routing/Configuration Error:** The service endpoint was not found. Check service configuration and routing.")
+                    
+                    # Special handling for timeouts
+                    if error_type == "timeout":
+                        st.warning("⏱️ **Timeout:** The service did not respond in time. It may be starting up (cold start).")
+                        
+                        # Force wake up button
+                        if st.button(f"🔨 Force Wake Up {display_name}", key=f"wakeup_{service_name}"):
+                            with st.spinner(f"Waking up {display_name}..."):
+                                try:
+                                    # Send multiple light requests to wake up the service
+                                    wakeup_url = None
+                                    if service_name == "cv_processor":
+                                        wakeup_url = f"{CV_PROCESSOR_URL}/health"
+                                    elif service_name == "embedding_service":
+                                        wakeup_url = f"{EMBEDDING_SERVICE_URL}/health"
+                                    
+                                    if wakeup_url:
+                                        for i in range(3):
+                                            try:
+                                                with httpx.Client(timeout=5.0) as client:
+                                                    client.get(wakeup_url)
+                                            except:
+                                                pass
+                                            time.sleep(1)
+                                        st.success(f"Sent wake-up requests to {display_name}")
+                                        st.info("💡 Run diagnostics again to check if the service is now available.")
+                                except Exception as e:
+                                    st.error(f"Failed to wake up service: {str(e)}")
+        
+        st.markdown("---")
+        
+        # Summary statistics
+        st.subheader("📊 Summary")
+        total_services = len(services)
+        healthy_services = sum(1 for s in services.values() if s.get("status") == "ok")
+        unhealthy_services = total_services - healthy_services
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Services", total_services)
+        with col2:
+            st.metric("Healthy", healthy_services, delta=f"{healthy_services}/{total_services}")
+        with col3:
+            st.metric("Unhealthy", unhealthy_services, delta=f"-{unhealthy_services}")
+        
+        # Refresh button
+        if st.button("🔄 Refresh Diagnostics", use_container_width=True):
+            st.session_state.diagnostics_result = None
+            st.rerun()
 
 # Footer
 st.markdown("---")

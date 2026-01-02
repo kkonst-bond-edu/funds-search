@@ -19,6 +19,11 @@ vector_store = VectorStore()
 
 EMBEDDING_SERVICE_URL = os.getenv("EMBEDDING_SERVICE_URL", "http://embedding-service:8001")
 
+@app.get("/health")
+async def health():
+    """Health check endpoint."""
+    return {"status": "ok"}
+
 async def get_embeddings(texts: List[str]) -> List[List[float]]:
     """Вызов вашего сервиса на Azure."""
     async with httpx.AsyncClient(timeout=300.0) as client:  # 5 minutes timeout for embedding generation
