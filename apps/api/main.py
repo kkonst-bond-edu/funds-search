@@ -49,6 +49,12 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/api/v1/health")
+async def health_v1():
+    """Health check endpoint with API v1 prefix."""
+    return {"status": "ok", "version": "2.0.0"}
+
+
 @app.post("/search", response_model=List[MatchResult])
 async def search(request: SearchRequest):
     """
@@ -138,12 +144,16 @@ async def check_service_with_retry(
     """
     last_error = None
     last_error_type = None
+    health_url = f"{service_url}/health"
+    
+    logger.info(f"Checking {service_name} at URL: {health_url}")
     
     for attempt in range(max_retries):
         try:
             start_time = time.time()
             async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.get(f"{service_url}/health")
+                logger.debug(f"{service_name} health check attempt {attempt + 1}/{max_retries}: {health_url}")
+                response = await client.get(health_url)
                 elapsed_ms = (time.time() - start_time) * 1000
                 
                 if response.status_code == 200:
@@ -155,9 +165,10 @@ async def check_service_with_retry(
                         error_type=None
                     )
                 elif response.status_code == 404:
-                    error_msg = f"Service endpoint not found (404)"
+                    error_msg = f"Service endpoint not found (404) at {health_url}"
                     error_type = "404"
                     logger.warning(f"Service {service_name} returned 404 (attempt {attempt + 1}/{max_retries}): {error_msg}")
+                    logger.warning(f"Full URL attempted: {health_url}, Response: {response.text[:200]}")
                     if attempt < max_retries - 1:
                         await asyncio.sleep(retry_delay)
                         continue
@@ -184,29 +195,29 @@ async def check_service_with_retry(
                         )
                         
         except httpx.TimeoutException as e:
-            last_error = f"Timeout after {timeout}s"
+            last_error = f"Timeout after {timeout}s at {health_url}"
             last_error_type = "timeout"
-            logger.warning(f"Service {service_name} timeout (attempt {attempt + 1}/{max_retries}): {str(e)}")
+            logger.warning(f"Service {service_name} timeout (attempt {attempt + 1}/{max_retries}): {last_error}")
             if attempt < max_retries - 1:
                 await asyncio.sleep(retry_delay)
                 continue
         except httpx.ConnectError as e:
-            last_error = f"Connection refused: {str(e)[:100]}"
+            last_error = f"Connection refused to {health_url}: {str(e)[:100]}"
             last_error_type = "connection"
-            logger.warning(f"Service {service_name} connection error (attempt {attempt + 1}/{max_retries}): {str(e)}")
+            logger.warning(f"Service {service_name} connection error (attempt {attempt + 1}/{max_retries}): {last_error}")
             if attempt < max_retries - 1:
                 await asyncio.sleep(retry_delay)
                 continue
         except Exception as e:
-            last_error = f"Unexpected error: {str(e)[:100]}"
+            last_error = f"Unexpected error calling {health_url}: {str(e)[:100]}"
             last_error_type = "unknown"
-            logger.error(f"Service {service_name} unexpected error (attempt {attempt + 1}/{max_retries}): {str(e)}")
+            logger.error(f"Service {service_name} unexpected error (attempt {attempt + 1}/{max_retries}): {last_error}")
             if attempt < max_retries - 1:
                 await asyncio.sleep(retry_delay)
                 continue
     
     # All retries failed
-    logger.error(f"Service {service_name} failed after {max_retries} attempts: {last_error}")
+    logger.error(f"Service {service_name} failed after {max_retries} attempts. URL: {health_url}, Error: {last_error}")
     return ServiceDiagnostic(
         status="error",
         latency=None,
@@ -285,6 +296,7 @@ async def check_llm_provider() -> ServiceDiagnostic:
 
 
 @app.get("/api/v1/system/diagnostics", response_model=SystemDiagnosticsResponse)
+@app.get("/system/diagnostics", response_model=SystemDiagnosticsResponse)  # Fallback route
 async def system_diagnostics():
     """
     Perform a comprehensive system diagnostics check.
@@ -302,9 +314,12 @@ async def system_diagnostics():
     """
     logger.info("Starting system diagnostics check...")
     
-    # Get service URLs from environment
+    # Get service URLs from environment with detailed logging
     cv_processor_url = os.getenv("CV_PROCESSOR_URL", "http://cv-processor:8001")
     embedding_service_url = os.getenv("EMBEDDING_SERVICE_URL", "http://embedding-service:8001")
+    
+    logger.info(f"CV Processor URL: {cv_processor_url}")
+    logger.info(f"Embedding Service URL: {embedding_service_url}")
     
     # Check all services in parallel
     import asyncio
@@ -346,17 +361,21 @@ async def system_diagnostics():
             error_type="exception"
         )
     
-    # Build services dict
+    # Build services dict with detailed connectivity information
     services = {
         "cv_processor": cv_result,
         "embedding_service": embedding_result,
         "pinecone": pinecone_result,
-        "llm_provider": llm_result
+        "llm_provider": llm_result,
+        # Detailed connectivity diagnostics
+        "api_to_cv_processor": cv_result,
+        "api_to_db": pinecone_result,
+        "api_to_llm": llm_result
     }
     
     # Determine overall status
-    all_ok = all(s.status == "ok" for s in services.values())
-    any_ok = any(s.status == "ok" for s in services.values())
+    all_ok = all(s.status == "ok" for s in [cv_result, embedding_result, pinecone_result, llm_result])
+    any_ok = any(s.status == "ok" for s in [cv_result, embedding_result, pinecone_result, llm_result])
     
     if all_ok:
         overall_status = "ok"
@@ -366,6 +385,8 @@ async def system_diagnostics():
         overall_status = "error"
     
     logger.info(f"System diagnostics complete. Overall status: {overall_status}")
+    logger.info(f"CV Processor: {cv_result.status}, Embedding: {embedding_result.status}, "
+                f"Pinecone: {pinecone_result.status}, LLM: {llm_result.status}")
     
     return SystemDiagnosticsResponse(
         status=overall_status,

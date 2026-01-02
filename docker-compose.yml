@@ -9,8 +9,10 @@ services:
       - PINECONE_API_KEY=${PINECONE_API_KEY}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - EMBEDDING_SERVICE_URL=http://embedding-service:8001
+      - CV_PROCESSOR_URL=http://cv-processor:8001
     depends_on:
       - embedding-service
+      - cv-processor
     volumes:
       - ./apps:/app/apps
       - ./shared:/app/shared

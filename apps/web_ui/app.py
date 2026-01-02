@@ -823,20 +823,55 @@ with tab5:
         # Show loading state
         with st.spinner("🔍 Running system diagnostics... Waking up services..."):
             try:
-                # Make request to diagnostics endpoint
-                with httpx.Client(timeout=60.0) as client:
-                    response = client.get(f"{BACKEND_API_URL}/api/v1/system/diagnostics")
-                    response.raise_for_status()
-                    diagnostics_data = response.json()
+                # Try primary endpoint first, then fallback
+                diagnostics_urls = [
+                    f"{BACKEND_API_URL}/api/v1/system/diagnostics",
+                    f"{BACKEND_API_URL}/system/diagnostics"
+                ]
+                
+                diagnostics_data = None
+                last_error = None
+                
+                for url in diagnostics_urls:
+                    try:
+                        logger.info(f"Attempting diagnostics at: {url}")
+                        with httpx.Client(timeout=60.0) as client:
+                            response = client.get(url)
+                            response.raise_for_status()
+                            diagnostics_data = response.json()
+                            logger.info(f"Successfully retrieved diagnostics from: {url}")
+                            break
+                    except httpx.HTTPStatusError as e:
+                        last_error = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+                        logger.warning(f"Failed to get diagnostics from {url}: {last_error}")
+                        if e.response.status_code != 404:
+                            # If it's not a 404, don't try the fallback
+                            raise
+                    except Exception as e:
+                        last_error = str(e)
+                        logger.warning(f"Error calling {url}: {last_error}")
+                        if "404" not in str(e).lower():
+                            raise
+                
+                if diagnostics_data:
                     st.session_state.diagnostics_result = diagnostics_data
                     st.session_state.diagnostics_running = False
+                else:
+                    raise Exception(f"All diagnostics endpoints failed. Last error: {last_error}")
+                    
             except httpx.HTTPStatusError as e:
                 st.session_state.diagnostics_running = False
-                st.error(f"❌ Failed to get diagnostics: HTTP {e.response.status_code} - {e.response.text}")
+                error_detail = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+                st.error(f"❌ Failed to get diagnostics: {error_detail}")
+                st.error(f"💡 Tried URLs: {', '.join(diagnostics_urls)}")
+                logger.error(f"Diagnostics failed: {error_detail}")
                 st.session_state.diagnostics_result = None
             except Exception as e:
                 st.session_state.diagnostics_running = False
-                st.error(f"❌ Error running diagnostics: {str(e)}")
+                error_msg = str(e)
+                st.error(f"❌ Error running diagnostics: {error_msg}")
+                st.error(f"💡 Backend API URL: {BACKEND_API_URL}")
+                logger.error(f"Diagnostics error: {error_msg}")
                 st.session_state.diagnostics_result = None
     
     # Display results
