@@ -1,23 +1,39 @@
-# Funds Search: Multi-Agent RAG Matching System
+# Autonomous Job Hunter: Multi-Agent RAG Matching System
 
-Production-ready candidate-vacancy matching system using LangGraph orchestration, semantic embeddings (BGE-M3), and AI reasoning (Gemini).
+Production-ready autonomous job discovery and matching system using LangGraph orchestration, semantic embeddings (BGE-M3), and AI reasoning (Gemini).
 
 ## Project Overview & Goal
 
-**Goal**: Match candidates with job vacancies at VC funds using semantic similarity and AI-powered reasoning.
+**Goal**: Autonomous job discovery and matching system that helps candidates find their ideal roles at VC-backed startups through intelligent agentic workflows.
 
-**Architecture**: Multi-Agent RAG (Retrieval-Augmented Generation) system that:
+**Evolution**: This project is evolving from "Funds Search" into "Autonomous Job Hunter" with a 3-agent architecture:
+- **Talent Strategist**: Builds personalized candidate profiles through conversational interviews
+- **Web Hunter**: Discovers job opportunities using Firecrawl web scraping
+- **Deep Match Analyst**: Performs sophisticated matching analysis with structured reports
+
+**Architecture**: Multi-Agent RAG (Retrieval-Augmented Generation) system with 3-agent workflow:
+- **Talent Strategist Agent**: Conducts conversational interviews to build UserPersona profiles (technical skills, career goals, startup stage preferences, cultural fit)
+- **Web Hunter Agent**: Discovers job opportunities from VC fund websites using Firecrawl integration
+- **Deep Match Analyst Agent**: Performs sophisticated matching analysis, generating structured MatchingReport objects with strengths, weaknesses, value propositions, and suggested actions
 - Processes and indexes CV/resume documents in Pinecone namespace `"cvs"`
 - Processes and indexes vacancy descriptions in Pinecone namespace `"vacancies"`
 - Matches candidates with vacancies using semantic similarity (BGE-M3 embeddings)
 - Generates AI explanations (Gemini) explaining why each vacancy fits the candidate
-- Provides a user-friendly web interface for recruiters
+- Provides a user-friendly web interface with AI Talent Strategist chat interface
 
 **Current Working State**: 
 - ✅ CV processing and storage in namespace `"cvs"` with metadata `type: 'cv'`
 - ✅ Vacancy processing and storage in namespace `"vacancies"` with metadata `type: 'vacancy'`
 - ✅ Candidate-vacancy matching with AI reasoning using Gemini 2.5 Flash
-- ✅ LangGraph orchestrator with 3-node matching workflow (fetch_candidate → search_vacancies → rerank_and_explain)
+- ✅ LangGraph orchestrator with enhanced workflow (talent_strategist → web_hunter → fetch_candidate → search_vacancies → rerank_and_explain)
+- ✅ UserPersona and MatchingReport schemas for structured agentic workflows
+- ✅ Placeholder nodes for Talent Strategist and Web Hunter agents
+- ✅ UI framework with AI Talent Strategist chat interface placeholder
+
+**Upcoming Roadmap**:
+- 🔄 Firecrawl integration for Web Hunter agent
+- 🔄 Full Talent Strategist interview processing logic
+- 🔄 Deep Match Analysis with structured MatchingReport generation
 
 ## System Architecture
 
@@ -139,8 +155,10 @@ All schemas in `shared/schemas.py` (Pydantic v2, single source of truth):
   "raw_text": str,
   "vector": List[float] | None,
   "url": str | None,
+  "source_url": str | None,  # Original source URL where job was discovered
   "location": str | None,
   "remote": bool | None,
+  "vc_fund": str | None,  # VC fund or investor associated with the company
   "created_at": datetime
 }
 ```
@@ -187,6 +205,31 @@ All schemas in `shared/schemas.py` (Pydantic v2, single source of truth):
 }
 ```
 
+**`UserPersona`** - Candidate profile from Talent Strategist interview
+```python
+{
+  "technical_skills": List[str],
+  "career_goals": List[str],
+  "preferred_startup_stage": str | None,  # Seed, Series A, Series B, etc.
+  "cultural_preferences": List[str],
+  "user_id": str | None
+}
+```
+
+**`MatchingReport`** - Structured matching analysis (replaces simple reasoning)
+```python
+{
+  "match_score": int,        # 0-100 match score
+  "strengths": List[str],    # Positive matches
+  "weaknesses": List[str],   # Gaps or concerns
+  "value_proposition": str,   # Why this match is valuable
+  "suggested_action": str,    # Recommended next steps
+  "job_id": str | None,
+  "vacancy_id": str | None,
+  "candidate_id": str | None
+}
+```
+
 ## Setup & Environment Variables
 
 ### Prerequisites
@@ -221,7 +264,7 @@ docker-compose up --build
 ```
 
 **Access:**
-- 🌐 Web UI: http://localhost:8501
+- 🌐 Web UI: http://localhost:8501 (includes AI Talent Strategist chat interface)
 - 🔌 API: http://localhost:8000
 - 📚 API Docs: http://localhost:8000/docs
 
@@ -403,24 +446,30 @@ sequenceDiagram
 2. **Analysis Node**: Gemini analyzes each match → Generate reasoning → Return ranked results
 
 ### Matching Workflow (LangGraph)
-**Graph Structure**: `Entry → fetch_candidate → search_vacancies → rerank_and_explain → End`
+**Graph Structure**: `Entry → talent_strategist → web_hunter → fetch_candidate → search_vacancies → rerank_and_explain → End`
 
 **State Schema (`MatchingState`):**
 - `candidate_id`: Input candidate identifier
 - `candidate_embedding`: Retrieved embedding vector (average of CV chunks)
+- `user_persona`: UserPersona object built from Talent Strategist interview
+- `raw_scraped_data`: List of raw job data discovered by Web Hunter agent
 - `retrieved_vacancies`: List of vacancy search results
 - `vacancy_scores`: Similarity scores from Pinecone
-- `match_results`: Final list of `VacancyMatchResult` objects
+- `match_results`: Final list of `VacancyMatchResult` objects (legacy format)
+- `final_reports`: List of `MatchingReport` objects (new structured format)
 - `top_k`: Number of results to return
 
 **Nodes:**
-1. **`fetch_candidate_node`**: Fetches candidate embedding from Pinecone namespace `"cvs"`. Computes average of all CV chunks and normalizes. Raises error if candidate not found.
-2. **`search_vacancies_node`**: Uses candidate embedding to search Pinecone namespace `"vacancies"` with filter `type: 'vacancy'`. Retrieves top-k results with similarity scores.
-3. **`rerank_and_explain_node`**: For each vacancy, uses Gemini AI to:
+1. **`talent_strategist_node`** (Placeholder): Processes interview/conversation context to build UserPersona. Extracts technical skills, career goals, startup stage preferences, and cultural fit.
+2. **`web_hunter_node`** (Placeholder): Uses Firecrawl to discover job postings from VC fund websites. Scrapes and processes job listings, storing raw_scraped_data for further processing.
+3. **`fetch_candidate_node`**: Fetches candidate embedding from Pinecone namespace `"cvs"`. Computes average of all CV chunks and normalizes. Raises error if candidate not found.
+4. **`search_vacancies_node`**: Uses candidate embedding to search Pinecone namespace `"vacancies"` with filter `type: 'vacancy'`. Retrieves top-k results with similarity scores.
+5. **`rerank_and_explain_node`**: For each vacancy, uses Gemini AI to:
    - Analyze why the vacancy fits the candidate
    - Generate detailed reasoning
    - Explain skills alignment and career benefits
    - Creates `VacancyMatchResult` objects with scores and reasoning
+   - (Future: Generate `MatchingReport` objects with structured analysis)
 
 **AI Prompting**: Uses `langchain-google-genai` (Gemini 2.5 Flash) with system prompt focused on recruiter-style analysis explaining skills match, experience alignment, career growth, and potential gaps.
 

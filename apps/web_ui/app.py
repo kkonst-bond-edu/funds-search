@@ -15,7 +15,7 @@ import time
 import httpx
 import streamlit as st
 from typing import Optional, List, Tuple
-from shared.schemas import VacancyMatchResult
+from shared.schemas import VacancyMatchResult, MatchingReport, UserPersona
 
 # Configure logging
 logging.basicConfig(
@@ -425,8 +425,74 @@ def display_match_result(match: VacancyMatchResult, index: int):
     """, unsafe_allow_html=True)
 
 
+def display_matching_report(report: MatchingReport, index: int):
+    """
+    Display a MatchingReport in an expandable card with strengths/weaknesses.
+    
+    Args:
+        report: MatchingReport object
+        index: Index of the report (for ranking)
+    """
+    # Color code based on match score
+    if report.match_score >= 80:
+        score_color = "#28a745"  # Green
+    elif report.match_score >= 60:
+        score_color = "#ffc107"  # Yellow
+    else:
+        score_color = "#dc3545"  # Red
+    
+    # Build strengths list HTML
+    strengths_html = ""
+    if report.strengths:
+        strengths_html = "<ul>" + "".join([f"<li>{s}</li>" for s in report.strengths]) + "</ul>"
+    else:
+        strengths_html = "<em>No strengths identified</em>"
+    
+    # Build weaknesses list HTML
+    weaknesses_html = ""
+    if report.weaknesses:
+        weaknesses_html = "<ul>" + "".join([f"<li>{w}</li>" for w in report.weaknesses]) + "</ul>"
+    else:
+        weaknesses_html = "<em>No weaknesses identified</em>"
+    
+    st.markdown(f"""
+        <div class="match-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                <h3 style="margin: 0;">Match Report #{index + 1}</h3>
+                <span class="score-badge" style="background-color: {score_color};">
+                    {report.match_score}/100
+                </span>
+            </div>
+            <div style="margin-bottom: 1rem;">
+                <strong>Value Proposition:</strong><br>
+                <div class="reasoning-text">{report.value_proposition}</div>
+            </div>
+            <details style="margin-top: 0.5rem;">
+                <summary style="cursor: pointer; color: #1f77b4; font-weight: bold;">✅ Strengths</summary>
+                <div style="margin-top: 0.5rem; padding: 0.5rem; background-color: #d4edda; border-radius: 0.25rem;">
+                    {strengths_html}
+                </div>
+            </details>
+            <details style="margin-top: 0.5rem;">
+                <summary style="cursor: pointer; color: #dc3545; font-weight: bold;">⚠️ Weaknesses</summary>
+                <div style="margin-top: 0.5rem; padding: 0.5rem; background-color: #f8d7da; border-radius: 0.25rem;">
+                    {weaknesses_html}
+                </div>
+            </details>
+            <div style="margin-top: 1rem; padding: 0.75rem; background-color: #e7f3ff; border-radius: 0.25rem; border-left: 4px solid #1f77b4;">
+                <strong>💡 Suggested Action:</strong><br>
+                {report.suggested_action}
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+
+# Initialize session state
+if "interview_complete" not in st.session_state:
+    st.session_state.interview_complete = False
+
 # Main UI
-st.title("🔍 Funds Search - Candidate Matching Dashboard")
+st.title("🔍 Autonomous Job Hunter - Candidate Matching Dashboard")
 st.markdown("---")
 
 # Sidebar for configuration
@@ -460,7 +526,7 @@ with st.sidebar:
         st.rerun()
 
 # Main content tabs
-tab1, tab2, tab3 = st.tabs(["📄 Upload CV", "💼 Process Vacancy", "🎯 Find Matches"])
+tab1, tab2, tab3, tab4 = st.tabs(["📄 Upload CV", "💼 Process Vacancy", "🎯 Find Matches", "🤖 AI Talent Strategist"])
 
 # Tab 1: Upload CV
 with tab1:
@@ -667,11 +733,75 @@ with tab3:
                 st.error(f"❌ Error: {str(e)}")
                 logger.error(f"Match finding error: {str(e)}")
 
+# Tab 4: AI Talent Strategist
+with tab4:
+    st.header("🤖 AI Talent Strategist")
+    st.markdown("Have a conversation with our AI Talent Strategist to build your personalized job search profile.")
+    
+    # Interview status indicator
+    if st.session_state.interview_complete:
+        st.success("✅ Interview Complete - Your persona has been created!")
+    else:
+        st.info("💬 Start a conversation to build your personalized profile.")
+    
+    # Chat interface placeholder
+    st.markdown("---")
+    st.subheader("Conversation")
+    
+    # Initialize chat history
+    if "talent_strategist_messages" not in st.session_state:
+        st.session_state.talent_strategist_messages = [
+            {
+                "role": "assistant",
+                "content": "Hello! I'm your AI Talent Strategist. I'll help you discover the perfect job opportunities. Let's start by understanding your technical skills, career goals, and preferences. What are your main technical skills?"
+            }
+        ]
+    
+    # Display chat messages
+    for message in st.session_state.talent_strategist_messages:
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
+    
+    # Chat input
+    if prompt := st.chat_input("Type your message here..."):
+        # Add user message
+        st.session_state.talent_strategist_messages.append({
+            "role": "user",
+            "content": prompt
+        })
+        
+        # Placeholder for AI response (will be implemented with actual LLM integration)
+        with st.chat_message("assistant"):
+            st.write("Thank you for that information! [Placeholder: AI Talent Strategist response will be implemented here]")
+            st.session_state.talent_strategist_messages.append({
+                "role": "assistant",
+                "content": "Thank you for that information! [Placeholder: AI Talent Strategist response will be implemented here]"
+            })
+        
+        st.rerun()
+    
+    # Reset interview button
+    if st.button("🔄 Reset Interview", use_container_width=True):
+        st.session_state.talent_strategist_messages = [
+            {
+                "role": "assistant",
+                "content": "Hello! I'm your AI Talent Strategist. I'll help you discover the perfect job opportunities. Let's start by understanding your technical skills, career goals, and preferences. What are your main technical skills?"
+            }
+        ]
+        st.session_state.interview_complete = False
+        st.rerun()
+    
+    # Complete interview button (placeholder)
+    if st.button("✅ Complete Interview", type="primary", use_container_width=True):
+        st.session_state.interview_complete = True
+        st.success("Interview completed! Your persona will be used for job matching.")
+        st.rerun()
+
 # Footer
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: #666; padding: 1rem;'>"
-    "Funds Search - Multi-Agent RAG Matching System"
+    "Autonomous Job Hunter - Multi-Agent RAG Matching System"
     "</div>",
     unsafe_allow_html=True
 )

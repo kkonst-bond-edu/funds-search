@@ -5,13 +5,13 @@ Implements a state machine with Retrieval and Analysis nodes.
 import logging
 import time
 import numpy as np
-from typing import TypedDict, List, Dict, Any
+from typing import TypedDict, List, Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
 import httpx
 import os
-from shared.schemas import Job, MatchResult, SearchRequest, VacancyMatchResult, MatchRequest
+from shared.schemas import Job, MatchResult, SearchRequest, VacancyMatchResult, MatchRequest, UserPersona, MatchingReport
 from shared.pinecone_client import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -298,9 +298,12 @@ class MatchingState(TypedDict):
     """State for the candidate-vacancy matching graph."""
     candidate_id: str
     candidate_embedding: List[float]
+    user_persona: Optional[UserPersona]  # User persona from interview/context
+    raw_scraped_data: List[Dict[str, Any]]  # Raw scraped job data from web discovery
     retrieved_vacancies: List[Dict[str, Any]]  # List of vacancy search results
     vacancy_scores: List[float]  # Store similarity scores from Pinecone
-    match_results: List[VacancyMatchResult]
+    match_results: List[VacancyMatchResult]  # Legacy format (for backward compatibility)
+    final_reports: List[MatchingReport]  # New structured matching reports
     top_k: int
 
 
@@ -321,6 +324,71 @@ Be specific about:
 - Why this role would be a good career move for the candidate
 
 Format your response as a structured explanation that a recruiter would use to present the match to both the candidate and the hiring manager."""
+
+
+async def talent_strategist_node(state: MatchingState) -> MatchingState:
+    """
+    Placeholder node: Talent Strategist - Process interview context to build user persona.
+    
+    This node will:
+    - Process interview/conversation context
+    - Extract technical skills, career goals, preferences
+    - Build UserPersona object
+    
+    Args:
+        state: Current matching state
+        
+    Returns:
+        Updated state with user_persona
+    """
+    # TODO: Implement interview processing logic
+    # For now, return state unchanged (placeholder)
+    logger.info("Talent Strategist node: Processing interview context (placeholder)")
+    
+    # Placeholder: If user_persona is not set, create a minimal one
+    if state.get("user_persona") is None:
+        user_persona = UserPersona(
+            technical_skills=[],
+            career_goals=[],
+            preferred_startup_stage=None,
+            cultural_preferences=[],
+            user_id=state.get("candidate_id")
+        )
+        return {
+            **state,
+            "user_persona": user_persona
+        }
+    
+    return state
+
+
+async def web_hunter_node(state: MatchingState) -> MatchingState:
+    """
+    Placeholder node: Web Hunter - Firecrawl discovery logic for job discovery.
+    
+    This node will:
+    - Use Firecrawl to discover job postings from VC fund websites
+    - Scrape and process job listings
+    - Store raw_scraped_data for further processing
+    
+    Args:
+        state: Current matching state
+        
+    Returns:
+        Updated state with raw_scraped_data
+    """
+    # TODO: Implement Firecrawl discovery logic
+    # For now, return state unchanged (placeholder)
+    logger.info("Web Hunter node: Discovering jobs via Firecrawl (placeholder)")
+    
+    # Placeholder: Initialize raw_scraped_data if not present
+    if state.get("raw_scraped_data") is None:
+        return {
+            **state,
+            "raw_scraped_data": []
+        }
+    
+    return state
 
 
 async def fetch_candidate_node(state: MatchingState) -> MatchingState:
@@ -420,7 +488,9 @@ async def fetch_candidate_node(state: MatchingState) -> MatchingState:
 
 async def search_vacancies_node(state: MatchingState) -> MatchingState:
     """
-    Node 2: Search for vacancies in Pinecone using filter {'type': 'vacancy'}.
+    Node: Search for vacancies in Pinecone using filter {'type': 'vacancy'}.
+    
+    If candidate_embedding is not available, fetches it first.
     
     Args:
         state: Current matching state
@@ -428,6 +498,11 @@ async def search_vacancies_node(state: MatchingState) -> MatchingState:
     Returns:
         Updated state with retrieved_vacancies and vacancy_scores
     """
+    # If candidate_embedding is not available, fetch it first
+    if not state.get("candidate_embedding"):
+        logger.info("Candidate embedding not found, fetching candidate first...")
+        state = await fetch_candidate_node(state)
+    
     candidate_embedding = state["candidate_embedding"]
     top_k = state.get("top_k", 10)
     
@@ -578,6 +653,8 @@ def create_matching_graph() -> StateGraph:
     """
     Create and compile the LangGraph orchestrator for candidate-vacancy matching.
     
+    New flow: Entry -> talent_strategist -> web_hunter -> search_vacancies -> rerank_and_explain -> END
+    
     Returns:
         Compiled StateGraph
     """
@@ -585,13 +662,18 @@ def create_matching_graph() -> StateGraph:
     workflow = StateGraph(MatchingState)
     
     # Add nodes
+    workflow.add_node("talent_strategist", talent_strategist_node)
+    workflow.add_node("web_hunter", web_hunter_node)
     workflow.add_node("fetch_candidate", fetch_candidate_node)
     workflow.add_node("search_vacancies", search_vacancies_node)
     workflow.add_node("rerank_and_explain", rerank_and_explain_node)
     
-    # Define edges
-    workflow.set_entry_point("fetch_candidate")
-    workflow.add_edge("fetch_candidate", "search_vacancies")
+    # Define edges - new roadmap flow
+    # Entry -> talent_strategist -> web_hunter -> search_vacancies -> rerank_and_explain -> END
+    # Note: fetch_candidate_node is called conditionally within search_vacancies_node if candidate_embedding is not available
+    workflow.set_entry_point("talent_strategist")
+    workflow.add_edge("talent_strategist", "web_hunter")
+    workflow.add_edge("web_hunter", "search_vacancies")
     workflow.add_edge("search_vacancies", "rerank_and_explain")
     workflow.add_edge("rerank_and_explain", END)
     
@@ -619,9 +701,12 @@ async def run_match(match_request: MatchRequest) -> List[VacancyMatchResult]:
     initial_state: MatchingState = {
         "candidate_id": match_request.candidate_id,
         "candidate_embedding": [],
+        "user_persona": None,
+        "raw_scraped_data": [],
         "retrieved_vacancies": [],
         "vacancy_scores": [],
         "match_results": [],
+        "final_reports": [],
         "top_k": match_request.top_k or 10
     }
     

@@ -188,10 +188,50 @@ curl -X POST ${CV_PROCESSOR_URL}/process-vacancy \
 3. **404 on Match**: Ensure CV has been processed first
 4. **500 Errors**: Check service logs for details
 
+## Discovery Mode Testing
+
+The Autonomous Job Hunter includes a Discovery mode powered by the Web Hunter agent (Firecrawl integration). This mode discovers job opportunities from VC fund websites.
+
+### Testing Discovery Mode
+
+**Note**: Discovery mode is currently in placeholder state. Full Firecrawl integration will be implemented in upcoming roadmap phases.
+
+#### Expected Workflow
+
+1. **Talent Strategist Interview**: Complete the AI Talent Strategist interview in the Web UI to build your UserPersona
+2. **Discovery Trigger**: The Web Hunter agent will automatically discover jobs based on your persona
+3. **Matching Analysis**: The Deep Match Analyst will generate structured MatchingReport objects
+
+#### Testing Steps (Placeholder)
+
+```bash
+# 1. Access Web UI
+# Navigate to http://localhost:8501
+
+# 2. Complete Talent Strategist Interview
+# - Go to "AI Talent Strategist" tab
+# - Have a conversation to build your persona
+# - Click "Complete Interview"
+
+# 3. Trigger Discovery (when implemented)
+# The Web Hunter will automatically discover jobs from VC fund websites
+
+# 4. Review Matching Reports
+# View structured reports with strengths, weaknesses, and value propositions
+```
+
+#### Expected Discovery Mode Features (Upcoming)
+
+- **Firecrawl Integration**: Automatic job discovery from VC fund websites
+- **UserPersona-Based Discovery**: Jobs matched to your technical skills, career goals, and startup stage preferences
+- **Structured Matching Reports**: Detailed analysis with strengths, weaknesses, value propositions, and suggested actions
+- **Real-time Updates**: New job opportunities discovered and matched automatically
+
 ## Performance Notes
 
 - First request may be slow (cold start)
 - CV processing takes 30-120 seconds depending on document size
 - Matching takes 10-30 seconds (includes AI reasoning)
 - Embedding generation: ~50-200ms per text
+- Discovery mode (when implemented): Expected 1-5 minutes for full discovery cycle
 

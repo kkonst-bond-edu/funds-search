@@ -21,8 +21,10 @@ class Job(BaseModel):
     raw_text: str = Field(..., description="Full text content of the job posting")
     vector: Optional[List[float]] = Field(None, description="Embedding vector for similarity search")
     url: Optional[str] = Field(None, description="URL of the job posting")
+    source_url: Optional[str] = Field(None, description="Original source URL where the job was discovered")
     location: Optional[str] = Field(None, description="Job location")
     remote: Optional[bool] = Field(None, description="Whether the position is remote")
+    vc_fund: Optional[str] = Field(None, description="VC fund or investor associated with the company")
     created_at: Optional[datetime] = Field(default_factory=datetime.now, description="Creation timestamp")
 
 
@@ -75,4 +77,25 @@ class SearchRequest(BaseModel):
     role: Optional[str] = Field(None, description="Optional role/job title filter")
     remote: Optional[bool] = Field(None, description="Optional boolean for remote positions")
     user_id: Optional[str] = Field(None, description="Optional user ID for personalized search")
+
+
+class UserPersona(BaseModel):
+    """User persona schema for candidate profiling."""
+    technical_skills: List[str] = Field(default_factory=list, description="List of technical skills")
+    career_goals: List[str] = Field(default_factory=list, description="Career goals and aspirations")
+    preferred_startup_stage: Optional[str] = Field(None, description="Preferred startup stage: Seed, Series A, Series B, Series C, Series D, Series E, IPO, or Public")
+    cultural_preferences: List[str] = Field(default_factory=list, description="Cultural preferences and values")
+    user_id: Optional[str] = Field(None, description="User ID associated with this persona")
+
+
+class MatchingReport(BaseModel):
+    """Matching report schema replacing simple reasoning."""
+    match_score: int = Field(..., description="Match score (0-100)")
+    strengths: List[str] = Field(default_factory=list, description="List of strengths/positive matches")
+    weaknesses: List[str] = Field(default_factory=list, description="List of weaknesses/gaps")
+    value_proposition: str = Field(..., description="Value proposition explaining why this match is valuable")
+    suggested_action: str = Field(..., description="Suggested action for the candidate")
+    job_id: Optional[str] = Field(None, description="Associated job ID")
+    vacancy_id: Optional[str] = Field(None, description="Associated vacancy ID")
+    candidate_id: Optional[str] = Field(None, description="Associated candidate ID")
 
