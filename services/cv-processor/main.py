@@ -15,14 +15,21 @@ from shared.pinecone_client import VectorStore
 
 app = FastAPI(title="CV Processor Service")
 doc_converter = DocumentConverter()
-vector_store = VectorStore()
+vector_store = None  # Lazy initialization
 
 EMBEDDING_SERVICE_URL = os.getenv("EMBEDDING_SERVICE_URL", "http://embedding-service:8001")
+
+def get_vector_store():
+    """Get or create VectorStore instance (lazy initialization)."""
+    global vector_store
+    if vector_store is None:
+        vector_store = VectorStore()
+    return vector_store
 
 @app.get("/health")
 async def health():
     """Health check endpoint."""
-    return {"status": "ok"}
+    return {"status": "ok", "service": "cv-processor"}
 
 async def get_embeddings(texts: List[str]) -> List[List[float]]:
     """Вызов вашего сервиса на Azure."""
@@ -70,7 +77,7 @@ async def process_cv(user_id: str, file: UploadFile = File(...)):
         )
 
         # 6. Сохраняем в Pinecone в namespace "cvs"
-        vector_store.upsert_resume(resume, namespace="cvs")
+        get_vector_store().upsert_resume(resume, namespace="cvs")
 
         return {"status": "success", "resume_id": resume.id, "chunks_processed": len(doc_chunks)}
 
@@ -123,7 +130,7 @@ async def process_vacancy(request: VacancyRequest):
     )
     
     # 4. Сохраняем в Pinecone в namespace "vacancies"
-    vector_store.upsert_vacancy(vacancy, namespace="vacancies")
+    get_vector_store().upsert_vacancy(vacancy, namespace="vacancies")
     
     return {
         "status": "success", 
