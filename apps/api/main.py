@@ -15,8 +15,8 @@ from shared.schemas import (
     SearchRequest, MatchResult, MatchRequest, VacancyMatchResult,
     SystemDiagnosticsResponse, ServiceDiagnostic
 )
-from apps.orchestrator import run_search, run_match, get_pinecone_client, get_llm
-from langchain_core.messages import SystemMessage, HumanMessage
+from apps.orchestrator import run_search, run_match, get_pinecone_client, get_llm_provider, LLMProviderFactory
+from langchain_core.messages import HumanMessage
 
 logger = logging.getLogger(__name__)
 
@@ -265,28 +265,38 @@ async def check_pinecone() -> ServiceDiagnostic:
 
 async def check_llm_provider() -> ServiceDiagnostic:
     """
-    Check LLM provider (Google Gemini) connectivity.
+    Check LLM provider connectivity (DeepSeek or other active agent).
     
     Returns:
         ServiceDiagnostic object with status, latency, and error details
     """
     try:
         start_time = time.time()
-        llm = get_llm()
-        # Make a simple test call
-        test_message = [HumanMessage(content="Say 'ok' if you can read this.")]
-        response = await llm.ainvoke(test_message)
+        llm_provider = get_llm_provider()
+        
+        # Get provider info for logging
+        provider_info = LLMProviderFactory.get_provider_info()
+        provider_name = provider_info.get("name", "Unknown")
+        
+        # Make a simple test call using the provider's health check
+        is_healthy = await llm_provider.health_check()
         elapsed_ms = (time.time() - start_time) * 1000
-        logger.info(f"LLM provider (Gemini) is healthy (latency: {elapsed_ms:.2f}ms)")
-        return ServiceDiagnostic(
-            status="ok",
-            latency=round(elapsed_ms, 2),
-            error=None,
-            error_type=None
-        )
+        
+        if is_healthy:
+            logger.info(f"LLM provider ({provider_name}) is healthy (latency: {elapsed_ms:.2f}ms)")
+            return ServiceDiagnostic(
+                status="ok",
+                latency=round(elapsed_ms, 2),
+                error=None,
+                error_type=None
+            )
+        else:
+            raise Exception("Health check returned False")
     except Exception as e:
         error_msg = str(e)[:200]
-        logger.error(f"LLM provider check failed: {error_msg}")
+        provider_info = LLMProviderFactory.get_provider_info()
+        provider_name = provider_info.get("name", "Unknown")
+        logger.error(f"LLM provider ({provider_name}) check failed: {error_msg}")
         return ServiceDiagnostic(
             status="error",
             latency=None,
@@ -305,7 +315,7 @@ async def system_diagnostics():
     - CV Processor service
     - Embedding Service
     - Pinecone Vector Store
-    - LLM Provider (Google Gemini)
+    - LLM Provider (DeepSeek or active agent)
     
     Implements retry logic (3 attempts with 2s delay) for service pings to trigger warm-up.
     
@@ -361,6 +371,18 @@ async def system_diagnostics():
             error_type="exception"
         )
     
+    # Get LLM provider info for display
+    try:
+        provider_info = LLMProviderFactory.get_provider_info()
+        provider_name = provider_info.get("name", "Unknown")
+        provider_status = provider_info.get("status", "unknown")
+        provider_model = provider_info.get("model", "unknown")
+    except Exception as e:
+        logger.warning(f"Could not get provider info: {str(e)}")
+        provider_name = "Unknown"
+        provider_status = "unknown"
+        provider_model = None
+    
     # Build services dict with detailed connectivity information
     services = {
         "cv_processor": cv_result,
@@ -370,7 +392,13 @@ async def system_diagnostics():
         # Detailed connectivity diagnostics
         "api_to_cv_processor": cv_result,
         "api_to_db": pinecone_result,
-        "api_to_llm": llm_result
+        "api_to_llm": llm_result,
+        # Agent information for UI display
+        "agent": {
+            "name": provider_name,
+            "status": "online" if llm_result.status == "ok" else "offline",
+            "model": provider_model if llm_result.status == "ok" else None
+        }
     }
     
     # Determine overall status

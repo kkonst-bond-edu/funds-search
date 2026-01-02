@@ -12,6 +12,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import logging
 import uuid
 import time
+import socket
 import httpx
 import streamlit as st
 from typing import Optional, List, Tuple
@@ -26,7 +27,8 @@ logger = logging.getLogger(__name__)
 
 # Configuration from environment variables
 # Note: cv-processor listens on port 8001 internally (8002 is the external host mapping)
-BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://api:8000")
+# Use localhost for local development, Azure will override with actual URL
+BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000")
 CV_PROCESSOR_URL = os.getenv("CV_PROCESSOR_URL", "http://cv-processor:8001")
 EMBEDDING_SERVICE_URL = os.getenv("EMBEDDING_SERVICE_URL", "http://embedding-service:8001")
 
@@ -96,6 +98,10 @@ def check_service_health(service_url: str, service_name: str, timeout: float = 5
                 return True, "Online"
             else:
                 return False, f"Unhealthy (HTTP {response.status_code})"
+    except socket.gaierror as e:
+        error_msg = f"API not reachable at {service_url}. Please verify {service_name.upper()}_URL configuration."
+        logger.error(f"DNS resolution error for {service_name}: {error_msg}")
+        return False, error_msg
     except httpx.TimeoutException:
         return False, "Timeout (may be starting up)"
     except httpx.ConnectError:
@@ -144,6 +150,11 @@ def make_request_with_retry(
                 # Only retry on connection/timeout errors
                 return response
                 
+        except socket.gaierror as e:
+            # DNS resolution error - don't retry, show user-friendly message
+            error_msg = f"API not reachable at {url}. Please verify BACKEND_API_URL configuration."
+            logger.error(f"DNS resolution error: {error_msg}")
+            raise Exception(error_msg) from e
         except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as e:
             last_exception = e
             if attempt < max_retries - 1:
@@ -297,6 +308,12 @@ def get_matches(candidate_id: str, top_k: int = 10) -> List[VacancyMatchResult]:
                 # Parse results into VacancyMatchResult objects
                 return [VacancyMatchResult(**result) for result in results]
                 
+        except socket.gaierror as e:
+            # DNS resolution error - show user-friendly message
+            error_msg = f"API not reachable at {BACKEND_API_URL}. Please verify BACKEND_API_URL configuration."
+            st.error(f"❌ {error_msg}")
+            logger.error(f"DNS resolution error in match_candidate: {error_msg}")
+            raise Exception(error_msg) from e
         except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as e:
             last_exception = e
             elapsed_time = time.time() - start_time
@@ -841,6 +858,13 @@ with tab5:
                             diagnostics_data = response.json()
                             logger.info(f"Successfully retrieved diagnostics from: {url}")
                             break
+                    except socket.gaierror as e:
+                        # DNS resolution error - show user-friendly message
+                        error_msg = f"API not reachable at {BACKEND_API_URL}. Please verify BACKEND_API_URL configuration."
+                        last_error = error_msg
+                        logger.error(f"DNS resolution error in diagnostics: {error_msg}")
+                        # Don't try other URLs if DNS fails
+                        raise Exception(error_msg) from e
                     except httpx.HTTPStatusError as e:
                         last_error = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
                         logger.warning(f"Failed to get diagnostics from {url}: {last_error}")
@@ -859,6 +883,12 @@ with tab5:
                 else:
                     raise Exception(f"All diagnostics endpoints failed. Last error: {last_error}")
                     
+            except socket.gaierror as e:
+                st.session_state.diagnostics_running = False
+                error_msg = f"API not reachable at {BACKEND_API_URL}. Please verify BACKEND_API_URL configuration."
+                st.error(f"❌ {error_msg}")
+                logger.error(f"DNS resolution error in diagnostics: {error_msg}")
+                st.session_state.diagnostics_result = None
             except httpx.HTTPStatusError as e:
                 st.session_state.diagnostics_running = False
                 error_detail = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
@@ -869,8 +899,13 @@ with tab5:
             except Exception as e:
                 st.session_state.diagnostics_running = False
                 error_msg = str(e)
-                st.error(f"❌ Error running diagnostics: {error_msg}")
-                st.error(f"💡 Backend API URL: {BACKEND_API_URL}")
+                # Check if it's a DNS error wrapped in another exception
+                if "not reachable" in error_msg or "gaierror" in error_msg.lower():
+                    dns_error_msg = f"API not reachable at {BACKEND_API_URL}. Please verify BACKEND_API_URL configuration."
+                    st.error(f"❌ {dns_error_msg}")
+                else:
+                    st.error(f"❌ Error running diagnostics: {error_msg}")
+                    st.error(f"💡 Backend API URL: {BACKEND_API_URL}")
                 logger.error(f"Diagnostics error: {error_msg}")
                 st.session_state.diagnostics_result = None
     
@@ -890,15 +925,31 @@ with tab5:
         if result.get("timestamp"):
             st.caption(f"Last checked: {result.get('timestamp')}")
         
+        # Display Agent Status prominently
+        services = result.get("services", {})
+        agent_info = services.get("agent", {})
+        if agent_info:
+            agent_name = agent_info.get("name", "Unknown")
+            agent_status = agent_info.get("status", "unknown")
+            agent_model = agent_info.get("model")
+            
+            if agent_status == "online":
+                st.info(f"🤖 **Agent Status:** {agent_name} ({agent_status.capitalize()})" + 
+                       (f" - Model: {agent_model}" if agent_model else ""))
+            else:
+                st.warning(f"🤖 **Agent Status:** {agent_name} ({agent_status.capitalize()})")
+        
         st.markdown("---")
         
         # Services table
         st.subheader("Service Details")
         
-        services = result.get("services", {})
-        
         # Create a table with service status
         for service_name, service_data in services.items():
+            # Skip agent info (already displayed above)
+            if service_name == "agent":
+                continue
+                
             # Format service name for display
             display_name = service_name.replace("_", " ").title()
             

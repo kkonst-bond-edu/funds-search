@@ -7,12 +7,12 @@ import time
 import numpy as np
 from typing import TypedDict, List, Dict, Any, Optional
 from langgraph.graph import StateGraph, END
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
 import httpx
 import os
 from shared.schemas import Job, MatchResult, SearchRequest, VacancyMatchResult, MatchRequest, UserPersona, MatchingReport
 from shared.pinecone_client import VectorStore
+from apps.orchestrator.llm import LLMProviderFactory
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,6 @@ class OrchestratorState(TypedDict):
 # Initialize services (lazy initialization)
 embedding_service_url = os.getenv("EMBEDDING_SERVICE_URL", "http://embedding-service:8001")
 pinecone_client = None
-llm = None
 
 
 def get_pinecone_client() -> VectorStore:
@@ -54,32 +53,16 @@ def get_pinecone_client() -> VectorStore:
     return pinecone_client
 
 
-def get_llm() -> ChatGoogleGenerativeAI:
-    """Get or create LLM instance."""
-    global llm
-    if llm is None:
-        try:
-            logger.info("Initializing Gemini LLM client...")
-            google_api_key = os.getenv("GOOGLE_API_KEY", "")
-            if not google_api_key:
-                logger.error("GOOGLE_API_KEY environment variable is not set")
-                raise ValueError("GOOGLE_API_KEY environment variable is required")
-            logger.info("GOOGLE_API_KEY found, creating ChatGoogleGenerativeAI instance...")
-            llm = ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash",
-                google_api_key=google_api_key
-            )
-            logger.info("Gemini LLM client initialized successfully")
-        except ValueError as e:
-            logger.error(f"Failed to initialize LLM client: {str(e)}")
-            logger.error("Please check that GOOGLE_API_KEY environment variable is set")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error initializing LLM client: {str(e)}")
-            raise
-    return llm
+def get_llm_provider():
+    """
+    Get the active LLM provider instance.
+    
+    Returns:
+        LLMProvider instance (e.g., DeepSeekProvider)
+    """
+    return LLMProviderFactory.get_active_provider()
 
-# System prompt for Gemini agent
+# System prompt for candidate matching agent (provider-agnostic)
 SYSTEM_PROMPT = """You are an expert AI analyst specializing in matching job openings at VC funds with candidate profiles.
 
 Your task is to analyze job postings and provide detailed reasoning about:
@@ -160,7 +143,7 @@ async def retrieval_node(state: OrchestratorState) -> OrchestratorState:
 
 async def analysis_node(state: OrchestratorState) -> OrchestratorState:
     """
-    Node 2: Analysis - Gemini Agent analyzes matches and generates reasoning.
+    Node 2: Analysis - LLM Agent analyzes matches and generates reasoning.
     
     Args:
         state: Current orchestrator state
@@ -174,14 +157,14 @@ async def analysis_node(state: OrchestratorState) -> OrchestratorState:
     
     match_results = []
     
+    # Get LLM provider (supports multi-agent architecture)
+    llm_provider = get_llm_provider()
+    
     for idx, job in enumerate(retrieved_jobs):
         # Get similarity score from Pinecone (cosine similarity)
         similarity_score = job_scores[idx] if idx < len(job_scores) else 0.0
-        # Calculate similarity score (cosine similarity from Pinecone)
-        # We'll use a placeholder score for now, as Pinecone already provides scores
-        # In a real implementation, you'd retrieve the score from the search results
         
-        # Prepare context for Gemini
+        # Prepare context for LLM (prompt management separated from provider)
         job_context = f"""
 Job Title: {job.title or 'N/A'}
 Company: {job.company}
@@ -193,7 +176,7 @@ Job Description:
 {job.raw_text[:2000]}  # Limit context size
 """
         
-        # Create messages for Gemini
+        # Create messages (provider-agnostic prompt structure)
         messages = [
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=f"""
@@ -209,10 +192,9 @@ Please analyze this job posting in the context of the search query and provide:
 """)
         ]
         
-        # Get analysis from Gemini
+        # Get analysis from LLM provider (with built-in retry logic)
         try:
-            gemini_llm = get_llm()
-            response = await gemini_llm.ainvoke(messages)
+            response = await llm_provider.ainvoke(messages)
             reasoning = response.content if hasattr(response, 'content') else str(response)
         except Exception as e:
             reasoning = f"Error generating analysis: {str(e)}"
@@ -307,7 +289,7 @@ class MatchingState(TypedDict):
     top_k: int
 
 
-# System prompt for Gemini agent in candidate-vacancy matching
+# System prompt for candidate-vacancy matching agent (provider-agnostic)
 MATCHING_SYSTEM_PROMPT = """You are an expert AI recruiter specializing in matching candidates with job vacancies.
 
 Your task is to analyze why a specific vacancy is a good fit for a candidate based on:
@@ -541,7 +523,7 @@ async def search_vacancies_node(state: MatchingState) -> MatchingState:
 
 async def rerank_and_explain_node(state: MatchingState) -> MatchingState:
     """
-    Node 3: Use Gemini to rerank results and explain WHY the vacancy fits the candidate.
+    Node 3: Use LLM to rerank results and explain WHY the vacancy fits the candidate.
     
     Args:
         state: Current matching state
@@ -556,6 +538,9 @@ async def rerank_and_explain_node(state: MatchingState) -> MatchingState:
     # Get candidate's resume text for context (optional, can be enhanced)
     # For now, we'll use the candidate_id in the prompt
     pc_client = get_pinecone_client()
+    
+    # Get LLM provider (supports multi-agent architecture)
+    llm_provider = get_llm_provider()
     
     match_results = []
     
@@ -597,14 +582,14 @@ async def rerank_and_explain_node(state: MatchingState) -> MatchingState:
         # Limit text length for LLM context
         vacancy_text = vacancy_text[:2000] if len(vacancy_text) > 2000 else vacancy_text
         
-        # Prepare context for Gemini - ensure all values are clean strings
+        # Prepare context for LLM - ensure all values are clean strings (prompt management separated)
         vacancy_context = f"""
 Vacancy ID: {vacancy_id}
 Vacancy Description:
 {vacancy_text}
 """
         
-        # Create messages for Gemini
+        # Create messages (provider-agnostic prompt structure)
         messages = [
             SystemMessage(content=MATCHING_SYSTEM_PROMPT),
             HumanMessage(content=f"""
@@ -624,10 +609,9 @@ Provide a comprehensive explanation that would help a recruiter present this mat
 """)
         ]
         
-        # Get analysis from Gemini
+        # Get analysis from LLM provider (with built-in retry logic)
         try:
-            gemini_llm = get_llm()
-            response = await gemini_llm.ainvoke(messages)
+            response = await llm_provider.ainvoke(messages)
             reasoning = response.content if hasattr(response, 'content') else str(response)
         except Exception as e:
             reasoning = f"Error generating analysis: {str(e)}"
