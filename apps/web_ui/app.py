@@ -246,6 +246,11 @@ def get_matches(candidate_id: str, top_k: int = 10) -> List[VacancyMatchResult]:
     """
     Get matches for a candidate.
     
+    Implements retry logic for Azure Container Apps cold starts:
+    - Retries every 10 seconds for a maximum of 4 minutes (24 retries)
+    - Shows user-friendly message about Azure nodes waking up
+    - Only shows final error if all retries fail
+    
     Args:
         candidate_id: Candidate/user ID
         top_k: Number of top matches to return
@@ -253,33 +258,71 @@ def get_matches(candidate_id: str, top_k: int = 10) -> List[VacancyMatchResult]:
     Returns:
         List of VacancyMatchResult objects
     """
-    try:
-        response = make_request_with_retry(
-            "POST",
-            f"{BACKEND_API_URL}/match",
-            json={
-                "candidate_id": candidate_id,
-                "top_k": top_k
-            }
-        )
-        response.raise_for_status()
-        results = response.json()
-        # Parse results into VacancyMatchResult objects
-        return [VacancyMatchResult(**result) for result in results]
-    except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error getting matches: {e.response.status_code} - {e.response.text}")
-        if e.response.status_code == 404:
-            raise ValueError(f"Candidate not found: {candidate_id}")
-        raise Exception(f"Failed to get matches: {e.response.status_code} - {e.response.text}")
-    except Exception as e:
-        logger.error(f"Error getting matches: {str(e)}")
-        error_msg = str(e)
-        if "cold start" in error_msg.lower() or "starting up" in error_msg.lower():
-            raise Exception(
-                f"API service is starting up. Please wait a moment and try again. "
-                f"Error: {error_msg}"
-            )
-        raise Exception(f"Error getting matches: {error_msg}")
+    max_retries = 24  # 4 minutes / 10 seconds = 24 retries
+    retry_delay = 10  # seconds
+    max_wait_time = 240  # 4 minutes in seconds
+    
+    last_exception = None
+    start_time = time.time()
+    
+    for attempt in range(max_retries):
+        try:
+            # Check if we've exceeded max wait time
+            elapsed_time = time.time() - start_time
+            if elapsed_time >= max_wait_time:
+                break
+            
+            # Make the request with a reasonable timeout per attempt
+            with httpx.Client(timeout=60.0) as client:
+                response = client.post(
+                    f"{BACKEND_API_URL}/match",
+                    json={
+                        "candidate_id": candidate_id,
+                        "top_k": top_k
+                    }
+                )
+                response.raise_for_status()
+                results = response.json()
+                # Parse results into VacancyMatchResult objects
+                return [VacancyMatchResult(**result) for result in results]
+                
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as e:
+            last_exception = e
+            elapsed_time = time.time() - start_time
+            
+            # Check if we should continue retrying
+            if elapsed_time >= max_wait_time or attempt >= max_retries - 1:
+                break
+            
+            # Show user-friendly message about Azure cold start
+            if attempt == 0:
+                st.info("Azure nodes are waking up... this might take 2-3 minutes. Please wait.")
+            
+            # Wait before retrying
+            time.sleep(retry_delay)
+            
+        except httpx.HTTPStatusError as e:
+            # For HTTP errors, don't retry (except 404 which might be temporary)
+            if e.response.status_code == 404:
+                # 404 might be due to eventual consistency, retry once more
+                if attempt < 1:
+                    time.sleep(retry_delay)
+                    continue
+                raise ValueError(f"Candidate not found: {candidate_id}")
+            logger.error(f"HTTP error getting matches: {e.response.status_code} - {e.response.text}")
+            raise Exception(f"Failed to get matches: {e.response.status_code} - {e.response.text}")
+        
+        except Exception as e:
+            # For other exceptions, don't retry
+            logger.error(f"Error getting matches: {str(e)}")
+            raise
+    
+    # If we get here, all retries failed
+    error_msg = f"Service unavailable after {max_wait_time} seconds. Azure nodes may still be starting up."
+    if last_exception:
+        error_msg += f" Last error: {str(last_exception)}"
+    logger.error(f"All retry attempts failed for get_matches: {error_msg}")
+    raise Exception(error_msg)
 
 
 def display_match_result(match: VacancyMatchResult, index: int):

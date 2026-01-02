@@ -3,6 +3,7 @@ LangGraph orchestrator for funds-search matching.
 Implements a state machine with Retrieval and Analysis nodes.
 """
 import logging
+import time
 from typing import TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -325,6 +326,9 @@ async def fetch_candidate_node(state: MatchingState) -> MatchingState:
     """
     Node 1: Fetch candidate embedding from Pinecone.
     
+    Handles eventual consistency in Pinecone by retrying once if candidate is not found initially.
+    This handles the case where the CV was just uploaded and Pinecone index is still updating.
+    
     Args:
         state: Current matching state
         
@@ -337,8 +341,14 @@ async def fetch_candidate_node(state: MatchingState) -> MatchingState:
     pc_client = get_pinecone_client()
     candidate_embedding = pc_client.get_candidate_embedding(candidate_id, namespace="cvs")
     
+    # If not found initially, wait 5 seconds and try once more (handles eventual consistency)
     if candidate_embedding is None:
-        raise ValueError(f"Candidate with ID {candidate_id} not found in Pinecone. Please ensure the CV has been processed.")
+        logger.info(f"Candidate {candidate_id} not found initially, waiting 5 seconds for Pinecone eventual consistency...")
+        time.sleep(5)
+        candidate_embedding = pc_client.get_candidate_embedding(candidate_id, namespace="cvs")
+        
+        if candidate_embedding is None:
+            raise ValueError(f"Candidate with ID {candidate_id} not found in Pinecone. Please ensure the CV has been processed.")
     
     return {
         **state,

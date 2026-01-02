@@ -76,6 +76,11 @@ async def match(request: MatchRequest):
     2. Searches for vacancies in Pinecone namespace "vacancies"
     3. Uses Gemini to rerank results and explain WHY the vacancy fits the candidate
     
+    Note: This endpoint has sufficient timeout to handle:
+    - Graph's retry logic (5 second sleep for Pinecone eventual consistency)
+    - Azure Container Apps cold starts (handled by client-side retries in web_ui)
+    - LLM processing time for multiple vacancies
+    
     Accepts a JSON payload with:
     - candidate_id: unique identifier for the candidate (user_id) (required)
     - top_k: number of top matches to return (optional, default: 10)
