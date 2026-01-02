@@ -4,6 +4,7 @@ Implements a state machine with Retrieval and Analysis nodes.
 """
 import logging
 import time
+import numpy as np
 from typing import TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -326,8 +327,11 @@ async def fetch_candidate_node(state: MatchingState) -> MatchingState:
     """
     Node 1: Fetch candidate embedding from Pinecone.
     
-    Handles eventual consistency in Pinecone by retrying once if candidate is not found initially.
-    This handles the case where the CV was just uploaded and Pinecone index is still updating.
+    Implements retry logic for Azure cold starts and Pinecone eventual consistency:
+    - Retries up to 5 times if candidate is not found
+    - Waits 5 seconds between retries
+    - Ensures Pinecone client is initialized during each retry (handles wake-up scenarios)
+    - Only raises ValueError after all retries have failed
     
     Args:
         state: Current matching state
@@ -336,24 +340,82 @@ async def fetch_candidate_node(state: MatchingState) -> MatchingState:
         Updated state with candidate_embedding
     """
     candidate_id = state["candidate_id"]
+    namespace = "cvs"
+    max_retries = 5
+    retry_delay = 5  # seconds
     
-    # Get candidate embedding from Pinecone using namespace "cvs"
-    pc_client = get_pinecone_client()
-    candidate_embedding = pc_client.get_candidate_embedding(candidate_id, namespace="cvs")
+    # BGE-M3 uses 1024 dimensions
+    EMBEDDING_DIM = 1024
     
-    # If not found initially, wait 5 seconds and try once more (handles eventual consistency)
-    if candidate_embedding is None:
-        logger.info(f"Candidate {candidate_id} not found initially, waiting 5 seconds for Pinecone eventual consistency...")
-        time.sleep(5)
-        candidate_embedding = pc_client.get_candidate_embedding(candidate_id, namespace="cvs")
-        
-        if candidate_embedding is None:
-            raise ValueError(f"Candidate with ID {candidate_id} not found in Pinecone. Please ensure the CV has been processed.")
+    # Retry loop for Azure cold starts and eventual consistency
+    for attempt in range(max_retries):
+        try:
+            # Get Pinecone client inside the loop to ensure it's initialized during wake-up
+            pc_client = get_pinecone_client()
+            
+            # Query Pinecone directly
+            logger.info(f"Fetching candidate embedding for {candidate_id} from namespace: {namespace} (attempt {attempt + 1}/{max_retries})")
+            query_result = pc_client.index.query(
+                vector=[0.0] * EMBEDDING_DIM,  # Dummy vector for BGE-M3 (1024 dims)
+                top_k=1,  # Get only the first match
+                include_metadata=True,
+                include_values=True,  # CRITICAL: Include values to get embedding
+                filter={"user_id": {"$eq": candidate_id}},
+                namespace=namespace
+            )
+            
+            # Check if matches are found
+            if not query_result.matches:
+                if attempt < max_retries - 1:
+                    logger.info(f"Candidate not found yet, retrying... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    # All retries failed
+                    raise ValueError(f"Candidate with ID {candidate_id} not found in Pinecone after {max_retries} attempts. Please ensure the CV has been processed.")
+            
+            # Extract 'values' from the first match
+            first_match = query_result.matches[0]
+            if not hasattr(first_match, 'values') or first_match.values is None:
+                if attempt < max_retries - 1:
+                    logger.info(f"Candidate found but missing embedding values, retrying... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    raise ValueError(f"Candidate {candidate_id} found but embedding values are missing after {max_retries} attempts.")
+            
+            # Get the embedding values from the first match
+            candidate_embedding = first_match.values
+            
+            # Normalize for cosine similarity
+            embedding_array = np.array(candidate_embedding)
+            norm = np.linalg.norm(embedding_array)
+            if norm > 0:
+                embedding_array = embedding_array / norm
+            
+            logger.info(f"Successfully extracted embedding for candidate {candidate_id} from first match (dim={len(embedding_array)})")
+            
+            return {
+                **state,
+                "candidate_embedding": embedding_array.tolist()
+            }
+            
+        except ValueError:
+            # Re-raise ValueError (candidate not found after all retries)
+            raise
+        except Exception as e:
+            # For other exceptions, retry if we have attempts left
+            if attempt < max_retries - 1:
+                logger.warning(f"Error fetching candidate embedding (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying...")
+                time.sleep(retry_delay)
+                continue
+            else:
+                # All retries failed
+                logger.error(f"Failed to fetch candidate embedding after {max_retries} attempts: {str(e)}")
+                raise ValueError(f"Candidate with ID {candidate_id} not found in Pinecone after {max_retries} attempts. Error: {str(e)}")
     
-    return {
-        **state,
-        "candidate_embedding": candidate_embedding
-    }
+    # Should not reach here, but just in case
+    raise ValueError(f"Candidate with ID {candidate_id} not found in Pinecone after {max_retries} attempts.")
 
 
 async def search_vacancies_node(state: MatchingState) -> MatchingState:

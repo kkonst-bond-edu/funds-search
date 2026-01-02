@@ -246,9 +246,11 @@ def get_matches(candidate_id: str, top_k: int = 10) -> List[VacancyMatchResult]:
     """
     Get matches for a candidate.
     
-    Implements retry logic for Azure Container Apps cold starts:
+    Implements improved retry logic for Azure Container Apps cold starts:
     - Retries every 10 seconds for a maximum of 4 minutes (24 retries)
-    - Shows user-friendly message about Azure nodes waking up
+    - Treats 404/500 errors as potential cold start symptoms on first attempt
+    - Shows user-friendly message about Azure services initializing during retries
+    - Uses 300s timeout to allow backend orchestrator time for internal retries
     - Only shows final error if all retries fail
     
     Args:
@@ -261,9 +263,12 @@ def get_matches(candidate_id: str, top_k: int = 10) -> List[VacancyMatchResult]:
     max_retries = 24  # 4 minutes / 10 seconds = 24 retries
     retry_delay = 10  # seconds
     max_wait_time = 240  # 4 minutes in seconds
+    request_timeout = 300.0  # 5 minutes - allows backend orchestrator time for internal retries
     
     last_exception = None
+    last_status_code = None
     start_time = time.time()
+    info_message_shown = False
     
     for attempt in range(max_retries):
         try:
@@ -272,8 +277,13 @@ def get_matches(candidate_id: str, top_k: int = 10) -> List[VacancyMatchResult]:
             if elapsed_time >= max_wait_time:
                 break
             
-            # Make the request with a reasonable timeout per attempt
-            with httpx.Client(timeout=60.0) as client:
+            # Show info message during retries (after first attempt fails)
+            if attempt > 0 and not info_message_shown:
+                st.info("Searching for candidate data... Azure services might still be initializing.")
+                info_message_shown = True
+            
+            # Make the request with extended timeout to allow backend orchestrator retries
+            with httpx.Client(timeout=request_timeout) as client:
                 response = client.post(
                     f"{BACKEND_API_URL}/match",
                     json={
@@ -294,33 +304,81 @@ def get_matches(candidate_id: str, top_k: int = 10) -> List[VacancyMatchResult]:
             if elapsed_time >= max_wait_time or attempt >= max_retries - 1:
                 break
             
-            # Show user-friendly message about Azure cold start
-            if attempt == 0:
-                st.info("Azure nodes are waking up... this might take 2-3 minutes. Please wait.")
+            # Show info message if not already shown
+            if not info_message_shown:
+                st.info("Searching for candidate data... Azure services might still be initializing.")
+                info_message_shown = True
             
             # Wait before retrying
             time.sleep(retry_delay)
             
         except httpx.HTTPStatusError as e:
-            # For HTTP errors, don't retry (except 404 which might be temporary)
-            if e.response.status_code == 404:
-                # 404 might be due to eventual consistency, retry once more
-                if attempt < 1:
+            last_exception = e
+            last_status_code = e.response.status_code
+            elapsed_time = time.time() - start_time
+            
+            # Treat 404/500 as potential cold start symptoms on first attempt
+            if e.response.status_code in (404, 500):
+                error_detail = e.response.text if hasattr(e.response, 'text') else str(e)
+                is_cold_start_symptom = (
+                    attempt == 0 or  # First attempt
+                    "Candidate not found" in error_detail or
+                    "not found" in error_detail.lower()
+                )
+                
+                if is_cold_start_symptom and elapsed_time < max_wait_time and attempt < max_retries - 1:
+                    # Show info message if not already shown
+                    if not info_message_shown:
+                        st.info("Searching for candidate data... Azure services might still be initializing.")
+                        info_message_shown = True
+                    
+                    logger.info(
+                        f"HTTP {e.response.status_code} error on attempt {attempt + 1}/{max_retries}: "
+                        f"{error_detail[:100]}. Treating as potential cold start, retrying..."
+                    )
                     time.sleep(retry_delay)
                     continue
-                raise ValueError(f"Candidate not found: {candidate_id}")
-            logger.error(f"HTTP error getting matches: {e.response.status_code} - {e.response.text}")
-            raise Exception(f"Failed to get matches: {e.response.status_code} - {e.response.text}")
+                else:
+                    # Not a cold start symptom or retries exhausted
+                    if e.response.status_code == 404:
+                        raise ValueError(f"Candidate not found: {candidate_id}")
+                    else:
+                        logger.error(f"HTTP error getting matches: {e.response.status_code} - {error_detail}")
+                        raise Exception(f"Failed to get matches: {e.response.status_code} - {error_detail}")
+            else:
+                # Other HTTP errors - don't retry
+                logger.error(f"HTTP error getting matches: {e.response.status_code} - {e.response.text}")
+                raise Exception(f"Failed to get matches: {e.response.status_code} - {e.response.text}")
         
         except Exception as e:
-            # For other exceptions, don't retry
-            logger.error(f"Error getting matches: {str(e)}")
-            raise
+            last_exception = e
+            elapsed_time = time.time() - start_time
+            
+            # For other exceptions, retry if it might be a cold start issue (first attempt only)
+            if attempt == 0 and elapsed_time < max_wait_time and attempt < max_retries - 1:
+                if not info_message_shown:
+                    st.info("Searching for candidate data... Azure services might still be initializing.")
+                    info_message_shown = True
+                logger.warning(f"Unexpected error on attempt {attempt + 1}/{max_retries}: {str(e)}. Retrying...")
+                time.sleep(retry_delay)
+                continue
+            else:
+                # Don't retry other exceptions after first attempt
+                logger.error(f"Error getting matches: {str(e)}")
+                raise
     
     # If we get here, all retries failed
-    error_msg = f"Service unavailable after {max_wait_time} seconds. Azure nodes may still be starting up."
+    if last_status_code in (404, 500):
+        if last_status_code == 404:
+            error_msg = f"Candidate not found: {candidate_id} (after {max_wait_time} seconds of retries)"
+        else:
+            error_msg = f"Service error after {max_wait_time} seconds. Azure services may still be starting up."
+    else:
+        error_msg = f"Service unavailable after {max_wait_time} seconds. Azure nodes may still be starting up."
+    
     if last_exception:
         error_msg += f" Last error: {str(last_exception)}"
+    
     logger.error(f"All retry attempts failed for get_matches: {error_msg}")
     raise Exception(error_msg)
 
