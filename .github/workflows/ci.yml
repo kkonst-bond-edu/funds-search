@@ -25,10 +25,26 @@ jobs:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v3
 
+      - name: Free disk space
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          # Remove unnecessary packages and files
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          # Clean pip cache
+          pip cache purge || true
+          echo "Disk space after cleanup:"
+          df -h
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
@@ -42,6 +58,12 @@ jobs:
       - name: Run pytest
         run: |
           pytest services/ apps/ -v
+
+      - name: Clean up Docker
+        run: |
+          docker system prune -af --volumes || true
+          echo "Docker disk usage:"
+          docker system df || true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v1
@@ -74,4 +96,9 @@ jobs:
           push: false
           tags: ghcr.io/${{ env.REPO }}:${{ github.sha }}
           file: ./Dockerfile
+
+      - name: Clean up Docker after build
+        if: github.event_name == 'pull_request'
+        run: |
+          docker system prune -af --volumes || true
 
