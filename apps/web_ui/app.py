@@ -534,13 +534,94 @@ def display_matching_report(report: MatchingReport, index: int):
 if "interview_complete" not in st.session_state:
     st.session_state.interview_complete = False
 
-# Main UI
-st.title("🔍 Autonomous Vacancy Hunter - Candidate Matching Dashboard")
-st.markdown("---")
+# Initialize chat history
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = [
+        {
+            "role": "assistant",
+            "content": "Привет! Я твой AI-рекрутер по фондам a16z. Опиши в свободной форме: какую роль ты ищешь, твой основной стек и есть ли предпочтения по индустрии (например, AI, Crypto или BioTech)?"
+        }
+    ]
 
-# Sidebar for configuration
+# Initialize filter state
+if "filters" not in st.session_state:
+    st.session_state.filters = {
+        "role": None,
+        "industry": None,
+        "skills": [],
+        "location": None,
+        "is_remote": None,
+        "company_stages": []
+    }
+
+# Main UI
+st.title("🔍 AI-рекрутер по фондам a16z")
+st.info("✅ Search Mode: Database (Verified)")
+
+# Sidebar for filters and configuration
 with st.sidebar:
-    st.header("Configuration")
+    st.header("🔧 Фильтры")
+    
+    # Role filter
+    role_filter = st.text_input(
+        "Роль / Должность",
+        value=st.session_state.filters.get("role") or "",
+        placeholder="e.g., Backend Engineer, ML Director"
+    )
+    
+    # Industry filter
+    industry_filter = st.text_input(
+        "Индустрия",
+        value=st.session_state.filters.get("industry") or "",
+        placeholder="e.g., AI, Crypto, BioTech"
+    )
+    
+    # Skills filter
+    skills_input = st.text_input(
+        "Навыки (через запятую)",
+        value=", ".join(st.session_state.filters.get("skills", [])) if st.session_state.filters.get("skills") else "",
+        placeholder="e.g., Python, Kubernetes, Docker"
+    )
+    
+    # Location filter
+    location_filter = st.text_input(
+        "Локация",
+        value=st.session_state.filters.get("location") or "",
+        placeholder="e.g., San Francisco, Remote"
+    )
+    
+    # Remote option
+    is_remote_filter = st.checkbox(
+        "Удаленная работа",
+        value=st.session_state.filters.get("is_remote") or False
+    )
+    
+    # Company stages
+    st.subheader("Стадия компании")
+    seed = st.checkbox("Seed", value="Seed" in (st.session_state.filters.get("company_stages") or []))
+    series_a = st.checkbox("Series A", value="Series A" in (st.session_state.filters.get("company_stages") or []))
+    growth = st.checkbox("Growth (Series B or later)", value="Growth (Series B or later)" in (st.session_state.filters.get("company_stages") or []))
+    
+    # Update filters in session state
+    company_stages = []
+    if seed:
+        company_stages.append("Seed")
+    if series_a:
+        company_stages.append("Series A")
+    if growth:
+        company_stages.append("Growth (Series B or later)")
+    
+    st.session_state.filters = {
+        "role": role_filter.strip() if role_filter.strip() else None,
+        "industry": industry_filter.strip() if industry_filter.strip() else None,
+        "skills": [s.strip() for s in skills_input.split(",") if s.strip()] if skills_input.strip() else [],
+        "location": location_filter.strip() if location_filter.strip() else None,
+        "is_remote": is_remote_filter if is_remote_filter else None,
+        "company_stages": company_stages
+    }
+    
+    st.markdown("---")
+    st.header("⚙️ Конфигурация")
     st.info(f"**API URL:** {BACKEND_API_URL}\n\n**CV Processor URL:** {CV_PROCESSOR_URL}")
 
     st.markdown("---")
@@ -566,6 +647,16 @@ with st.sidebar:
 
     # Refresh button
     if st.button("🔄 Refresh Health Status", use_container_width=True):
+        st.rerun()
+    
+    # Clear chat button
+    if st.button("🗑️ Очистить чат", use_container_width=True):
+        st.session_state.chat_messages = [
+            {
+                "role": "assistant",
+                "content": "Привет! Я твой AI-рекрутер по фондам a16z. Опиши в свободной форме: какую роль ты ищешь, твой основной стек и есть ли предпочтения по индустрии (например, AI, Crypto или BioTech)?"
+            }
+        ]
         st.rerun()
 
 # Main content tabs

@@ -99,45 +99,57 @@ graph TB
 
 ```mermaid
 graph TD
-    subgraph "Client Side (Streamlit)"
-        UI[Web UI: Chat Interface]
-        SS[Session State: History]
+    %% Colors and Styles
+    classDef user fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef agent fill:#00c2ff,stroke:#005577,stroke-width:2px,color:#fff;
+    classDef service fill:#77dd77,stroke:#225522,stroke-width:2px;
+    classDef database fill:#ffb347,stroke:#774400,stroke-width:2px;
+
+    %% Client Side
+    USER((👤 User)):::user -->|Chat / CV| UI[🖥️ Web UI: Streamlit]
+
+    subgraph "🛠️ Orchestration Layer (FastAPI Gateway)"
+        UI <--> HUB{🧠 Agent Dispatcher}
     end
 
-    subgraph "Application Layer (FastAPI)"
-        ORC[Orchestrator: ChatSearchAgent]
-        API[API Gateway /api/v1/vacancies/chat]
+    %% Specialized Agents
+    subgraph "🤖 AI Agent Fleet"
+        TS[<b>Talent Strategist</b><br/><i>The Profiler</i><br/>DeepSeek V3]:::agent
+        JS[<b>Job Scout</b><br/><i>The Intent Extractor</i><br/>DeepSeek R1]:::agent
+        MM[<b>Matchmaker</b><br/><i>The Analytical RAG</i><br/>Claude/GPT-4o]:::agent
+        HA[<b>Hunter Agent</b><br/><i>Real-time Scraper</i><br/>Firecrawl Service]:::agent
     end
 
-    subgraph "AI & Reasoning Layer"
-        LLM[DeepSeek: Intent Interpreter]
-        RS[Response Synthesizer]
+    %% Internal Services
+    subgraph "⚙️ Infrastructure Services"
+        EMB[🧮 Embedding Service<br/>BGE-M3 Model]:::service
+        CV[📄 CV Processor<br/>PDF OCR / Parser]:::service
     end
 
-    subgraph "Internal Microservices"
-        EMB[Embedding Service: BGE-M3]
-        CV[CV Processor: PDF Parser]
+    %% Data Storage
+    subgraph "💾 Persistence Layer"
+        PC[(🌲 Pinecone Vector DB<br/><i>Vacancies Namespace</i>)]:::database
+        PC2[(🌲 Pinecone Vector DB<br/><i>Personas Namespace</i>)]:::database
     end
 
-    subgraph "Data Layer"
-        PC[(Pinecone: Vector DB)]
-        JSON[(Local Cache: vacancies_dump.json)]
-    end
+    %% Connections
+    HUB -->|1. Parse CV| TS
+    TS -->|Text Extraction| CV
+    TS -->|Save Digital Twin| PC2
 
-    %% Flow: User Query
-    UI -->|1. Natural Language| API
-    API -->|2. Message| ORC
-    ORC -->|3. Extraction Prompt| LLM
-    LLM -->|4. Structured Filters| ORC
-    ORC -->|5. Text for Vector| EMB
-    EMB -->|6. Query Vector| PC
-    PC -->|7. Top Matches| ORC
-    ORC -->|8. Context + Results| RS
-    RS -->|9. Human Response| UI
+    HUB -->|2. Understand Message| JS
+    JS -->|Vectorize Intent| EMB
+    EMB -->|Semantic Search| PC
 
-    %% Future CV Flow
-    UI -.->|Upload PDF| CV
-    CV -.->|Extracted Text| ORC
+    HUB -->|3. Compare & Filter| MM
+    MM <-->|Fetch Top K| PC
+    MM <-->|Get User Profile| PC2
+
+    HUB -->|4. No Data?| HA
+    HA -->|Live Crawl| a16z_Jobs[🌐 a16z Boards]
+
+    %% Feedback loop
+    MM -->|Final Response| UI
 ```
 
 ## Component Descriptions
