@@ -206,7 +206,7 @@ async def search_vacancies(
             # Use Firecrawl for real search - DO NOT fall back to mock on failure
             try:
                 firecrawl_service = get_firecrawl_service()
-                vacancies = firecrawl_service.fetch_vacancies(filter_params, max_results=10)
+                vacancies = firecrawl_service.fetch_vacancies(filter_params, max_results=100)
 
                 logger.info(
                     "vacancy_search_completed", total_results=len(vacancies), source="firecrawl"

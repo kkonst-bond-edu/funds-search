@@ -18,6 +18,14 @@ from shared.schemas import (
 from apps.orchestrator import run_search, run_match, get_pinecone_client, get_llm_provider, LLMProviderFactory
 from langchain_core.messages import HumanMessage
 
+# Import vacancies router
+import sys
+from pathlib import Path
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+from src.api.v1.vacancies import router as vacancies_router
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,6 +43,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include routers
+app.include_router(vacancies_router)
 
 
 @app.get("/")

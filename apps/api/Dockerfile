@@ -30,8 +30,10 @@ COPY --from=builder /root/.local /root/.local
 ENV PYTHONPATH=/app
 ENV PATH=/root/.local/bin:$PATH
 
-# Copy application code
+# Copy application code (including src directory for vacancy search)
 COPY . .
+# Ensure src directory is accessible
+RUN ls -la /app/src 2>/dev/null || echo "Warning: src directory not found"
 
 EXPOSE 8000
 

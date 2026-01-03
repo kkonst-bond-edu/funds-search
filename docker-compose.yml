@@ -1,22 +1,30 @@
+networks:
+  job-hunter-net:
+    driver: bridge
+
 services:
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+    command: uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
-      - PINECONE_API_KEY=${PINECONE_API_KEY}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
-      - ACTIVE_AGENT=${ACTIVE_AGENT:-deepseek}
       - EMBEDDING_SERVICE_URL=http://embedding-service:8001
       - CV_PROCESSOR_URL=http://cv-processor:8001
+      - ACTIVE_AGENT=${ACTIVE_AGENT:-deepseek}
     depends_on:
       - embedding-service
       - cv-processor
     volumes:
       - ./apps:/app/apps
       - ./shared:/app/shared
+      - ./src:/app/src
+    networks:
+      - job-hunter-net
 
   embedding-service:
     build:
@@ -30,6 +38,8 @@ services:
     volumes:
       - ./services:/app/services
       - ./shared:/app/shared
+    networks:
+      - job-hunter-net
 
   cv-processor:
     build:
@@ -43,6 +53,8 @@ services:
       - PINECONE_API_KEY=${PINECONE_API_KEY}
       - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME}
       - EMBEDDING_SERVICE_URL=http://embedding-service:8001
+    networks:
+      - job-hunter-net
 
   vc-worker:
     build:
@@ -54,6 +66,8 @@ services:
     volumes:
       - ./services:/app/services
       - ./shared:/app/shared
+    networks:
+      - job-hunter-net
 
   web-ui:
     build:
@@ -61,6 +75,8 @@ services:
       dockerfile: apps/web_ui/Dockerfile
     ports:
       - "8501:8501"
+    env_file:
+      - .env
     environment:
       - BACKEND_API_URL=http://api:8000
       - CV_PROCESSOR_URL=http://cv-processor:8001
@@ -70,4 +86,6 @@ services:
     volumes:
       - ./apps:/app/apps
       - ./shared:/app/shared
+    networks:
+      - job-hunter-net
 

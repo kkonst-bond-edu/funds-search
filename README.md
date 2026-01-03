@@ -32,8 +32,14 @@ Production-ready autonomous job discovery and matching system using LangGraph or
 - ✅ Placeholder nodes for Talent Strategist and Web Hunter agents
 - ✅ UI framework with AI Talent Strategist chat interface placeholder
 
+**Phase 1 Complete**:
+- ✅ Firecrawl integration for real vacancy search
+- ✅ Vacancy Search API with mock and Firecrawl modes
+- ✅ Robust CompanyStage enum comparison
+- ✅ Streamlit UI with Vacancy Search tab
+- ✅ Security: API key masking in logs
+
 **Upcoming Roadmap**:
-- 🔄 Firecrawl integration for Web Hunter agent
 - 🔄 Full Talent Strategist interview processing logic
 - 🔄 Deep Match Analysis with structured MatchingReport generation
 
@@ -245,23 +251,45 @@ All schemas in `shared/schemas.py` (Pydantic v2, single source of truth):
 PINECONE_API_KEY=your_key
 PINECONE_INDEX_NAME=funds-search
 GOOGLE_API_KEY=your_key
+FIRECRAWL_API_KEY=your_key  # Optional: For real vacancy search via Firecrawl
 ```
 
 **Service-Specific Variables:**
 
 | Service | Required Variables |
 |---------|-------------------|
-| **API** | `PINECONE_API_KEY`, `GOOGLE_API_KEY`, `EMBEDDING_SERVICE_URL` (default: `http://embedding-service:8001`) |
-| **Web UI** | `BACKEND_API_URL` (default: `http://api:8000`), `CV_PROCESSOR_URL` (default: `http://cv-processor:8001`) |
+| **API** | `PINECONE_API_KEY`, `GOOGLE_API_KEY`, `FIRECRAWL_API_KEY` (optional), `EMBEDDING_SERVICE_URL` (default: `http://embedding-service:8001`) |
+| **Web UI** | `BACKEND_API_URL` (default: `http://api:8000`), `CV_PROCESSOR_URL` (default: `http://cv-processor:8001`), `FIRECRAWL_API_KEY` (optional) |
 | **CV Processor** | `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, `EMBEDDING_SERVICE_URL` |
 | **Embedding** | `CUDA_VISIBLE_DEVICES` (optional, for GPU) |
+
+### Firecrawl Setup (Optional)
+
+To enable real vacancy search via Firecrawl:
+
+1. **Get Firecrawl API Key:**
+   - Sign up at https://firecrawl.dev
+   - Get your API key from the dashboard
+
+2. **Add to `.env`:**
+   ```bash
+   FIRECRAWL_API_KEY=fc-your_api_key_here
+   ```
+
+3. **Verify Configuration:**
+   ```bash
+   curl http://localhost:8000/api/v1/vacancies/health
+   ```
+   Check that `firecrawl_configured: true` in the response.
+
+**Note:** Without `FIRECRAWL_API_KEY`, the system will use mock data for vacancy search.
 
 ### Quick Start
 
 ```bash
 git clone <repo-url>
 cd funds-search
-cp .env.example .env  # Add your API keys
+cp .env.example .env  # Add your API keys (including FIRECRAWL_API_KEY if desired)
 docker-compose up --build
 ```
 
@@ -278,6 +306,8 @@ docker-compose up --build
 |----------|--------|-------------|
 | `/health` | GET | Health check |
 | `/api/v1/system/diagnostics` | GET | System diagnostics (checks all services) |
+| `/api/v1/vacancies/search` | POST | Search vacancies (returns `List[Vacancy]`) - supports mock and Firecrawl modes |
+| `/api/v1/vacancies/health` | GET | Vacancy search service health (includes Firecrawl configuration status) |
 | `/search` | POST | Search jobs (returns `List[MatchResult]`) |
 | `/match` | POST | Match candidate→vacancies (returns `List[VacancyMatchResult]`) |
 
@@ -356,6 +386,108 @@ Returns comprehensive health check for all services:
     "candidate_id": "user123"
   }
 ]
+```
+
+### Vacancy API (`:8000`)
+
+The Vacancy Search Service provides endpoints for searching and filtering job vacancies.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/vacancies/search` | POST | Search vacancies with filters (returns `List[Vacancy]`) |
+| `/api/v1/vacancies/health` | GET | Health check for vacancy search service |
+
+**`POST /api/v1/vacancies/search`** - Search vacancies with filters
+
+Accepts a `VacancyFilter` object and returns a list of matching `Vacancy` objects. Currently implements mock logic returning 2-3 realistic vacancies from logistics/AI startups for UI testing.
+
+**Request Body:**
+```json
+{
+  "role": "Software Engineer",
+  "skills": ["Python", "FastAPI", "PostgreSQL"],
+  "location": "San Francisco",
+  "is_remote": true,
+  "company_stages": ["Seed", "SeriesA"],
+  "industry": "Logistics",
+  "min_salary": 120000
+}
+```
+
+**Request Schema (`VacancyFilter`):**
+- `role` (optional, string): Job role or title filter
+- `skills` (optional, List[str]): Required skills list
+- `location` (optional, string): Job location filter
+- `is_remote` (optional, bool): Remote work option filter
+- `company_stages` (optional, List[Enum]): Company funding stages filter (Seed, SeriesA, Growth, ScaleUp)
+- `industry` (optional, string): Industry filter
+- `min_salary` (optional, int): Minimum salary requirement (>= 0)
+
+**Response Schema (`Vacancy`):**
+- `title` (string): Job title
+- `company_name` (string): Company name
+- `company_stage` (Enum): Company funding stage (Seed, SeriesA, Growth, ScaleUp)
+- `location` (string): Job location
+- `industry` (string): Industry sector
+- `salary_range` (optional, string): Salary range (e.g., "$120k-$180k")
+- `description_url` (string): URL to full job description
+- `required_skills` (List[str]): Required skills list
+- `remote_option` (bool): Whether remote work is available
+
+**Response Example:**
+```json
+[
+  {
+    "title": "Senior Backend Engineer",
+    "company_name": "LogiTech AI",
+    "company_stage": "SeriesA",
+    "location": "San Francisco, CA",
+    "industry": "Logistics",
+    "salary_range": "$150k-$200k",
+    "description_url": "https://logitech-ai.com/careers/backend-engineer",
+    "required_skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS"],
+    "remote_option": true
+  },
+  {
+    "title": "ML Engineer - Supply Chain Optimization",
+    "company_name": "RouteOptima",
+    "company_stage": "Seed",
+    "location": "New York, NY",
+    "industry": "Logistics",
+    "salary_range": "$130k-$170k",
+    "description_url": "https://routeoptima.com/jobs/ml-engineer",
+    "required_skills": ["Python", "TensorFlow", "PyTorch", "Kubernetes", "GCP"],
+    "remote_option": false
+  }
+]
+```
+
+**Example Request:**
+```bash
+curl -X POST "http://localhost:8000/api/v1/vacancies/search" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "role": "Engineer",
+    "skills": ["Python", "FastAPI"],
+    "location": "San Francisco",
+    "is_remote": true,
+    "company_stages": ["Seed", "SeriesA"],
+    "industry": "Logistics",
+    "min_salary": 120000
+  }'
+```
+
+**`GET /api/v1/vacancies/health`** - Health check
+
+Returns the health status of the vacancy search service.
+
+**Response Example:**
+```json
+{
+  "status": "ok",
+  "service": "vacancy-search",
+  "version": "1.0.0"
+}
 ```
 
 ### CV Processor (`:8002`)

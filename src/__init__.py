@@ -1,0 +1,2 @@
+"""Vacancy Search Service package."""
+

@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Search - Vacancy Search Service</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+        
+        .content {
+            padding: 40px;
+        }
+        
+        .form-section {
+            background: #f8f9fa;
+            padding: 30px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .form-group input[type="text"],
+        .form-group input[type="number"],
+        .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .form-group input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            margin-right: 8px;
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            padding: 12px;
+            background: white;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+        }
+        
+        .search-button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 40px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            width: 100%;
+            margin-top: 20px;
+        }
+        
+        .search-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .search-button:active {
+            transform: translateY(0);
+        }
+        
+        .source-selector {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .source-option {
+            flex: 1;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .source-option input[type="radio"] {
+            margin-right: 8px;
+        }
+        
+        .source-option:hover {
+            border-color: #667eea;
+            background: #f0f4ff;
+        }
+        
+        .source-option input[type="radio"]:checked + label {
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .results-section {
+            margin-top: 30px;
+        }
+        
+        .error-message {
+            background: #fee;
+            color: #c33;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border-left: 4px solid #c33;
+        }
+        
+        .results-count {
+            font-size: 1.2em;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 20px;
+        }
+        
+        .vacancy-card {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 25px;
+            margin-bottom: 20px;
+            transition: box-shadow 0.3s, transform 0.2s;
+        }
+        
+        .vacancy-card:hover {
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
+            transform: translateY(-2px);
+        }
+        
+        .vacancy-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 15px;
+        }
+        
+        .vacancy-title {
+            font-size: 1.5em;
+            font-weight: 700;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        
+        .vacancy-company {
+            font-size: 1.1em;
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .vacancy-badge {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+        
+        .badge-stage {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        
+        .badge-remote {
+            background: #e8f5e9;
+            color: #388e3c;
+        }
+        
+        .badge-industry {
+            background: #fff3e0;
+            color: #f57c00;
+        }
+        
+        .vacancy-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 15px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 6px;
+        }
+        
+        .detail-item {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .detail-label {
+            font-size: 0.85em;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        
+        .detail-value {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .skills-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 15px;
+        }
+        
+        .skill-tag {
+            background: #667eea;
+            color: white;
+            padding: 5px 12px;
+            border-radius: 15px;
+            font-size: 0.85em;
+            font-weight: 500;
+        }
+        
+        .vacancy-link {
+            display: inline-block;
+            margin-top: 15px;
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            transition: background 0.3s;
+        }
+        
+        .vacancy-link:hover {
+            background: #5568d3;
+        }
+        
+        .no-results {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        
+        .no-results-icon {
+            font-size: 4em;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Job Search</h1>
+            <p>Find your next opportunity at VC-backed startups</p>
+        </div>
+        
+        <div class="content">
+            <form method="post" action="/ui/search">
+                <div class="source-selector">
+                    <div class="source-option">
+                        <input type="radio" id="source-jobs" name="search_source" value="jobs" {% if not form_data or form_data.search_source == "jobs" %}checked{% endif %}>
+                        <label for="source-jobs">🔥 Firecrawl (a16z Jobs)</label>
+                    </div>
+                    <div class="source-option">
+                        <input type="radio" id="source-vacancies" name="search_source" value="vacancies" {% if form_data and form_data.search_source == "vacancies" %}checked{% endif %}>
+                        <label for="source-vacancies">📋 Mock Data</label>
+                    </div>
+                </div>
+                
+                <div class="form-section">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="role">Job Role / Title</label>
+                            <input type="text" id="role" name="role" placeholder="e.g., MLOps Engineer, ML Director" value="{{ form_data.role if form_data else '' }}">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="industry">Industry</label>
+                            <input type="text" id="industry" name="industry" placeholder="e.g., Logistics, FreightTech" value="{{ form_data.industry if form_data else '' }}">
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="skills">Required Skills (comma-separated)</label>
+                        <input type="text" id="skills" name="skills" placeholder="e.g., Python, Kubernetes, Docker, MLflow" value="{{ form_data.skills if form_data else '' }}">
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="location">Location</label>
+                            <input type="text" id="location" name="location" placeholder="e.g., San Francisco, Remote" value="{{ form_data.location if form_data else '' }}">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="min_salary">Minimum Salary</label>
+                            <input type="number" id="min_salary" name="min_salary" placeholder="e.g., 120000" value="{{ form_data.min_salary if form_data else '' }}">
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="company_stages">Company Stages (comma-separated)</label>
+                            <input type="text" id="company_stages" name="company_stages" placeholder="e.g., Seed, SeriesA, Growth" value="{{ form_data.company_stages if form_data else '' }}">
+                            <small style="color: #666; margin-top: 5px; display: block;">Options: Seed, SeriesA, Growth, ScaleUp</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <div class="checkbox-group">
+                                <input type="checkbox" id="is_remote" name="is_remote" {% if form_data and form_data.is_remote == "on" %}checked{% endif %}>
+                                <label for="is_remote" style="margin: 0; cursor: pointer;">Remote Work Available</label>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <button type="submit" class="search-button">🔍 Search Jobs</button>
+                </div>
+            </form>
+            
+            {% if error %}
+            <div class="error-message">
+                <strong>Error:</strong> {{ error }}
+            </div>
+            {% endif %}
+            
+            {% if vacancies %}
+            <div class="results-section">
+                <div class="results-count">
+                    Found {{ vacancies|length }} job{{ 's' if vacancies|length != 1 else '' }}
+                </div>
+                
+                {% for vacancy in vacancies %}
+                <div class="vacancy-card">
+                    <div class="vacancy-header">
+                        <div>
+                            <div class="vacancy-title">{{ vacancy.title }}</div>
+                            <div class="vacancy-company">{{ vacancy.company_name }}</div>
+                        </div>
+                        <div>
+                            <span class="vacancy-badge badge-stage">{{ vacancy.company_stage }}</span>
+                            {% if vacancy.remote_option %}
+                            <span class="vacancy-badge badge-remote">Remote</span>
+                            {% endif %}
+                            <span class="vacancy-badge badge-industry">{{ vacancy.industry }}</span>
+                        </div>
+                    </div>
+                    
+                    <div class="vacancy-details">
+                        <div class="detail-item">
+                            <span class="detail-label">📍 Location</span>
+                            <span class="detail-value">{{ vacancy.location }}</span>
+                        </div>
+                        {% if vacancy.salary_range %}
+                        <div class="detail-item">
+                            <span class="detail-label">💰 Salary</span>
+                            <span class="detail-value">{{ vacancy.salary_range }}</span>
+                        </div>
+                        {% endif %}
+                    </div>
+                    
+                    {% if vacancy.required_skills %}
+                    <div class="skills-list">
+                        {% for skill in vacancy.required_skills %}
+                        <span class="skill-tag">{{ skill }}</span>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    
+                    <a href="{{ vacancy.description_url }}" target="_blank" class="vacancy-link">
+                        View Job Details →
+                    </a>
+                </div>
+                {% endfor %}
+            </div>
+            {% elif error == None and request.method == "POST" %}
+            <div class="no-results">
+                <div class="no-results-icon">🔍</div>
+                <h2>No jobs found</h2>
+                <p>Try adjusting your search criteria</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>
+
