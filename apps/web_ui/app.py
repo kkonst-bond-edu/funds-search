@@ -465,6 +465,70 @@ def display_match_result(match: VacancyMatchResult, index: int):
     )
 
 
+def display_vacancy_card(vacancy: dict, index: int):
+    """
+    Display a vacancy card in the chat interface.
+    
+    Args:
+        vacancy: Vacancy dictionary from API response
+        index: Index of the vacancy (for ranking)
+    """
+    # Handle both dict and Pydantic model
+    if hasattr(vacancy, 'dict'):
+        vacancy = vacancy.dict()
+    elif hasattr(vacancy, 'model_dump'):
+        vacancy = vacancy.model_dump()
+    
+    # Extract fields
+    title = vacancy.get("title", "Unknown")
+    company_name = vacancy.get("company_name", "Unknown")
+    company_stage = vacancy.get("company_stage", "Unknown")
+    if hasattr(company_stage, 'value'):
+        company_stage = company_stage.value
+    location = vacancy.get("location", "Not specified")
+    industry = vacancy.get("industry", "Technology")
+    salary_range = vacancy.get("salary_range")
+    description_url = vacancy.get("description_url", "")
+    required_skills = vacancy.get("required_skills", [])
+    remote_option = vacancy.get("remote_option", False)
+    
+    # Create card HTML
+    card_html = f"""
+    <div class="match-card" style="margin-top: 1rem;">
+        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+            <div style="flex: 1;">
+                <h4 style="margin: 0; color: #1f77b4;">💼 {title}</h4>
+                <p style="margin: 0.25rem 0; color: #666; font-size: 0.9rem;">
+                    <strong>{company_name}</strong> | {company_stage} | {industry}
+                </p>
+            </div>
+        </div>
+        <div style="margin-bottom: 0.5rem;">
+            <span style="color: #666;">📍 {location}</span>
+    """
+    
+    if salary_range:
+        card_html += f'<span style="margin-left: 1rem; color: #666;">💰 {salary_range}</span>'
+    
+    if remote_option:
+        card_html += '<span style="margin-left: 1rem; background-color: #10b981; color: white; padding: 0.25rem 0.75rem; border-radius: 0.5rem; font-size: 0.875rem;">🌐 Remote</span>'
+    
+    card_html += "</div>"
+    
+    if required_skills:
+        skills_str = ", ".join([f"`{skill}`" for skill in required_skills[:5]])
+        if len(required_skills) > 5:
+            skills_str += f" +{len(required_skills) - 5} more"
+        card_html += f'<div style="margin-top: 0.5rem;"><strong>Skills:</strong> {skills_str}</div>'
+    
+    if description_url:
+        card_html += f'<div style="margin-top: 0.75rem;"><a href="{description_url}" target="_blank" style="color: #1f77b4; text-decoration: none; font-weight: 500;">→ Details</a></div>'
+    
+    card_html += "</div>"
+    
+    st.markdown(card_html, unsafe_allow_html=True)
+
+
 def display_matching_report(report: MatchingReport, index: int):
     """
     Display a MatchingReport in an expandable card with strengths/weaknesses.
@@ -534,7 +598,7 @@ def display_matching_report(report: MatchingReport, index: int):
 if "interview_complete" not in st.session_state:
     st.session_state.interview_complete = False
 
-# Initialize chat history
+# Initialize chat history for AI Recruiter tab
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = [
         {
@@ -543,89 +607,17 @@ if "chat_messages" not in st.session_state:
         }
     ]
 
-# Initialize filter state
-if "filters" not in st.session_state:
-    st.session_state.filters = {
-        "role": None,
-        "industry": None,
-        "skills": [],
-        "location": None,
-        "is_remote": None,
-        "company_stages": []
-    }
-
 # Main UI
 st.title("🔍 AI-рекрутер по фондам a16z")
 st.info("✅ Search Mode: Database (Verified)")
 
-# Sidebar for filters and configuration
+# Sidebar - Clean: Only Configuration and Service Health
 with st.sidebar:
-    st.header("🔧 Фильтры")
-    
-    # Role filter
-    role_filter = st.text_input(
-        "Роль / Должность",
-        value=st.session_state.filters.get("role") or "",
-        placeholder="e.g., Backend Engineer, ML Director"
-    )
-    
-    # Industry filter
-    industry_filter = st.text_input(
-        "Индустрия",
-        value=st.session_state.filters.get("industry") or "",
-        placeholder="e.g., AI, Crypto, BioTech"
-    )
-    
-    # Skills filter
-    skills_input = st.text_input(
-        "Навыки (через запятую)",
-        value=", ".join(st.session_state.filters.get("skills", [])) if st.session_state.filters.get("skills") else "",
-        placeholder="e.g., Python, Kubernetes, Docker"
-    )
-    
-    # Location filter
-    location_filter = st.text_input(
-        "Локация",
-        value=st.session_state.filters.get("location") or "",
-        placeholder="e.g., San Francisco, Remote"
-    )
-    
-    # Remote option
-    is_remote_filter = st.checkbox(
-        "Удаленная работа",
-        value=st.session_state.filters.get("is_remote") or False
-    )
-    
-    # Company stages
-    st.subheader("Стадия компании")
-    seed = st.checkbox("Seed", value="Seed" in (st.session_state.filters.get("company_stages") or []))
-    series_a = st.checkbox("Series A", value="Series A" in (st.session_state.filters.get("company_stages") or []))
-    growth = st.checkbox("Growth (Series B or later)", value="Growth (Series B or later)" in (st.session_state.filters.get("company_stages") or []))
-    
-    # Update filters in session state
-    company_stages = []
-    if seed:
-        company_stages.append("Seed")
-    if series_a:
-        company_stages.append("Series A")
-    if growth:
-        company_stages.append("Growth (Series B or later)")
-    
-    st.session_state.filters = {
-        "role": role_filter.strip() if role_filter.strip() else None,
-        "industry": industry_filter.strip() if industry_filter.strip() else None,
-        "skills": [s.strip() for s in skills_input.split(",") if s.strip()] if skills_input.strip() else [],
-        "location": location_filter.strip() if location_filter.strip() else None,
-        "is_remote": is_remote_filter if is_remote_filter else None,
-        "company_stages": company_stages
-    }
-    
-    st.markdown("---")
-    st.header("⚙️ Конфигурация")
+    st.header("⚙️ Configuration")
     st.info(f"**API URL:** {BACKEND_API_URL}\n\n**CV Processor URL:** {CV_PROCESSOR_URL}")
 
     st.markdown("---")
-    st.subheader("Service Health")
+    st.subheader("🏥 Service Health")
 
     # Health check for API service
     api_healthy, api_message = check_service_health(BACKEND_API_URL, "API")
@@ -645,8 +637,124 @@ with st.sidebar:
         if "starting up" in cv_message.lower():
             st.caption("💡 Service may be waking from cold start. Wait a moment and refresh.")
 
+    # Health check for Embedding Service
+    embedding_healthy, embedding_message = check_service_health(EMBEDDING_SERVICE_URL, "Embedding Service")
+    if embedding_healthy:
+        st.success(f"✅ **Embedding Service:** {embedding_message}")
+    else:
+        st.warning(f"⚠️ **Embedding Service:** {embedding_message}")
+        if "starting up" in embedding_message.lower():
+            st.caption("💡 Service may be waking from cold start. Wait a moment and refresh.")
+
     # Refresh button
     if st.button("🔄 Refresh Health Status", use_container_width=True):
+        st.rerun()
+
+# Main content tabs
+tab_chat, tab_search, tab_cv, tab_diagnostics = st.tabs([
+    "💬 AI Recruiter",
+    "🔍 Manual Search",
+    "📄 CV Analysis",
+    "🛠️ Diagnostics"
+])
+
+# ============================================================================
+# TAB 1: AI RECRUITER (Chat Interface)
+# ============================================================================
+with tab_chat:
+    st.header("💬 AI Recruiter")
+    st.markdown("Chat with the AI recruiter to find your ideal role at a16z portfolio companies.")
+    
+    # Display chat history
+    for message in st.session_state.chat_messages:
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
+            
+            # If this is an assistant message with vacancies, display them
+            if message["role"] == "assistant" and "vacancies" in message:
+                vacancies = message["vacancies"]
+                for idx, vacancy in enumerate(vacancies):
+                    display_vacancy_card(vacancy, idx)
+    
+    # Chat input
+    if user_input := st.chat_input("Опиши, какую роль ты ищешь..."):
+        # Add user message to chat history
+        st.session_state.chat_messages.append({"role": "user", "content": user_input})
+        
+        # Initialize variables for assistant response
+        summary = ""
+        vacancies = []
+        
+        # Show status while processing
+        with st.status("AI анализирует твой запрос...", expanded=True) as status:
+            try:
+                # Call chat API
+                chat_endpoint = f"{BACKEND_API_URL}/api/v1/vacancies/chat"
+                logger.info(f"Calling chat endpoint: {chat_endpoint}")
+                
+                with httpx.Client(timeout=120.0) as client:
+                    response = client.post(
+                        chat_endpoint,
+                        json={"message": user_input}
+                    )
+                    response.raise_for_status()
+                    result = response.json()
+                
+                # Extract results
+                vacancies = result.get("vacancies", [])
+                summary = result.get("summary", "Найдены подходящие вакансии.")
+                
+                status.update(label="✅ Поиск завершен!", state="complete")
+                
+            except httpx.HTTPStatusError as e:
+                status.update(label="❌ Ошибка API", state="error")
+                error_detail = e.response.text[:200] if e.response.text else "Unknown error"
+                try:
+                    error_json = e.response.json()
+                    error_detail = error_json.get("detail", error_detail)
+                except:
+                    pass
+                
+                # Add error message to chat
+                error_message = "Извини, произошла ошибка при поиске вакансий. Попробуй еще раз или уточни свой запрос."
+                if e.response.status_code == 422:
+                    error_message = "Не удалось понять твой запрос. Попробуй описать роль, навыки или индустрию более подробно."
+                elif e.response.status_code == 500:
+                    error_message = "Временная ошибка сервера. Пожалуйста, попробуй еще раз через несколько секунд."
+                
+                st.session_state.chat_messages.append({
+                    "role": "assistant",
+                    "content": error_message
+                })
+                st.rerun()
+                
+            except httpx.RequestError as e:
+                status.update(label="❌ Ошибка соединения", state="error")
+                error_message = f"Не удалось подключиться к серверу. Проверь, что API доступен по адресу {BACKEND_API_URL}."
+                st.session_state.chat_messages.append({
+                    "role": "assistant",
+                    "content": error_message
+                })
+                st.rerun()
+                
+            except Exception as e:
+                status.update(label="❌ Неожиданная ошибка", state="error")
+                logger.error(f"Chat search error: {str(e)}")
+                error_message = f"Произошла неожиданная ошибка: {str(e)[:100]}"
+                st.session_state.chat_messages.append({
+                    "role": "assistant",
+                    "content": error_message
+                })
+                st.rerun()
+        
+        # Add assistant response with summary and vacancies (only if we have them)
+        if summary or vacancies:
+            st.session_state.chat_messages.append({
+                "role": "assistant",
+                "content": summary if summary else "Найдены подходящие вакансии.",
+                "vacancies": vacancies
+            })
+        
         st.rerun()
     
     # Clear chat button
@@ -659,305 +767,19 @@ with st.sidebar:
         ]
         st.rerun()
 
-# Main content tabs
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-    [
-        "📄 Upload CV",
-        "💼 Process Vacancy",
-        "🎯 Find Matches",
-        "🤖 AI Talent Strategist",
-        "🔍 Vacancy Search",
-        "🔧 System Diagnostics",
-    ]
-)
-
-# Tab 1: Upload CV
-with tab1:
-    st.header("Upload Candidate Resume")
-    st.markdown("Upload a PDF resume to process and index it for matching.")
-
-    user_id = st.text_input(
-        "Candidate ID (User ID)",
-        value="",
-        help="Enter a unique identifier for the candidate (e.g., email, username, or UUID)",
-    )
-
-    uploaded_file = st.file_uploader(
-        "Choose a PDF file", type=["pdf"], help="Upload a PDF resume file"
-    )
-
-    if st.button("Process CV", type="primary", use_container_width=True):
-        if not user_id:
-            st.error("Please enter a Candidate ID")
-        elif not uploaded_file:
-            st.error("Please upload a PDF file")
-        else:
-            # Progress bar for CV processing
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-
-            try:
-                status_text.text("📤 Uploading CV file...")
-                progress_bar.progress(10)
-
-                status_text.text("🔄 Converting PDF to text...")
-                progress_bar.progress(30)
-
-                status_text.text("🧠 Generating embeddings...")
-                progress_bar.progress(50)
-
-                status_text.text("💾 Saving to database...")
-                progress_bar.progress(70)
-
-                result = process_cv_upload(uploaded_file, user_id)
-
-                progress_bar.progress(100)
-                status_text.text("✅ Processing complete!")
-
-                st.success(f"✅ CV processed successfully!")
-                st.json(result)
-                st.info(
-                    f"**Resume ID:** {result.get('resume_id')}\n\n**Chunks Processed:** {result.get('chunks_processed')}"
-                )
-
-                # Clear progress after a moment
-                time.sleep(0.5)
-                progress_bar.empty()
-                status_text.empty()
-
-            except Exception as e:
-                progress_bar.empty()
-                status_text.empty()
-                st.error(f"❌ Error: {str(e)}")
-                logger.error(f"CV processing error: {str(e)}")
-
-# Tab 2: Process Vacancy
-with tab2:
-    st.header("Process Vacancy Description")
-    st.markdown("Paste a vacancy description to process and index it for matching.")
-
-    vacancy_id_input = st.text_input(
-        "Vacancy ID (Optional)",
-        value="",
-        help="Enter a unique identifier for the vacancy. Leave empty to auto-generate.",
-    )
-
-    vacancy_text = st.text_area(
-        "Vacancy Description",
-        height=300,
-        placeholder="Paste the full vacancy description here...",
-        help="Enter the complete text description of the vacancy",
-    )
-
-    if st.button("Process Vacancy", type="primary", use_container_width=True):
-        if not vacancy_text.strip():
-            st.error("Please enter a vacancy description")
-        else:
-            # Progress bar for vacancy processing
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-
-            try:
-                vacancy_id = vacancy_id_input.strip() if vacancy_id_input.strip() else None
-
-                status_text.text("📝 Processing vacancy text...")
-                progress_bar.progress(20)
-
-                status_text.text("🧠 Generating embeddings...")
-                progress_bar.progress(50)
-
-                status_text.text("💾 Saving to database...")
-                progress_bar.progress(80)
-
-                result = process_vacancy(vacancy_text, vacancy_id)
-
-                progress_bar.progress(100)
-                status_text.text("✅ Processing complete!")
-
-                st.success(f"✅ Vacancy processed successfully!")
-                st.json(result)
-                st.info(
-                    f"**Vacancy ID:** {result.get('vacancy_id')}\n\n**Chunks Processed:** {result.get('chunks_processed')}"
-                )
-
-                # Clear progress after a moment
-                time.sleep(0.5)
-                progress_bar.empty()
-                status_text.empty()
-
-            except Exception as e:
-                progress_bar.empty()
-                status_text.empty()
-                st.error(f"❌ Error: {str(e)}")
-                logger.error(f"Vacancy processing error: {str(e)}")
-
-# Tab 3: Find Matches
-with tab3:
-    st.header("Find Candidate Matches")
-    st.markdown("Enter a candidate ID to find matching vacancies.")
-
-    col1, col2 = st.columns([3, 1])
-
-    with col1:
-        candidate_id = st.text_input(
-            "Candidate ID",
-            value="",
-            help="Enter the candidate ID (user_id) that was used when uploading the CV",
-        )
-
-    with col2:
-        top_k = st.number_input(
-            "Number of Matches",
-            min_value=1,
-            max_value=50,
-            value=10,
-            help="Number of top matches to return",
-        )
-
-    if st.button("Find Matches", type="primary", use_container_width=True):
-        if not candidate_id:
-            st.error("Please enter a Candidate ID")
-        else:
-            # Progress bar for matching
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-
-            try:
-                status_text.text("🔍 Fetching candidate profile...")
-                progress_bar.progress(20)
-
-                status_text.text("📊 Searching for matching vacancies...")
-                progress_bar.progress(50)
-
-                status_text.text("🤖 Analyzing matches with AI...")
-                progress_bar.progress(75)
-
-                matches = get_matches(candidate_id, top_k)
-
-                progress_bar.progress(100)
-                status_text.text("✅ Matching complete!")
-
-                # Clear progress after a moment
-                time.sleep(0.5)
-                progress_bar.empty()
-                status_text.empty()
-
-                if not matches:
-                    st.warning("No matches found for this candidate.")
-                else:
-                    st.success(f"✅ Found {len(matches)} matches!")
-                    st.markdown("---")
-
-                    # Display matches
-                    for idx, match in enumerate(matches):
-                        display_match_result(match, idx)
-
-                    # Summary statistics
-                    st.markdown("---")
-                    st.subheader("📊 Summary Statistics")
-                    avg_score = sum(m.score for m in matches) / len(matches) * 100
-                    max_score = max(m.score for m in matches) * 100
-                    min_score = min(m.score for m in matches) * 100
-
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Average Match", f"{avg_score:.1f}%")
-                    with col2:
-                        st.metric("Best Match", f"{max_score:.1f}%")
-                    with col3:
-                        st.metric("Lowest Match", f"{min_score:.1f}%")
-
-            except ValueError as e:
-                progress_bar.empty()
-                status_text.empty()
-                st.error(f"❌ {str(e)}")
-                st.info("💡 Make sure you've uploaded a CV for this candidate ID first.")
-            except Exception as e:
-                progress_bar.empty()
-                status_text.empty()
-                st.error(f"❌ Error: {str(e)}")
-                logger.error(f"Match finding error: {str(e)}")
-
-# Tab 4: AI Talent Strategist
-with tab4:
-    st.header("🤖 AI Talent Strategist")
-    st.markdown(
-        "Have a conversation with our AI Talent Strategist to build your personalized vacancy search profile."
-    )
-
-    # Interview status indicator
-    if st.session_state.interview_complete:
-        st.success("✅ Interview Complete - Your persona has been created!")
-    else:
-        st.info("💬 Start a conversation to build your personalized profile.")
-
-    # Chat interface placeholder
-    st.markdown("---")
-    st.subheader("Conversation")
-
-    # Initialize chat history
-    if "talent_strategist_messages" not in st.session_state:
-        st.session_state.talent_strategist_messages = [
-            {
-                "role": "assistant",
-                "content": "Hello! I'm your AI Talent Strategist. I'll help you discover the perfect vacancy opportunities. Let's start by understanding your technical skills, career goals, and preferences. What are your main technical skills?",
-            }
-        ]
-
-    # Display chat messages
-    for message in st.session_state.talent_strategist_messages:
-        with st.chat_message(message["role"]):
-            st.write(message["content"])
-
-    # Chat input
-    if prompt := st.chat_input("Type your message here..."):
-        # Add user message
-        st.session_state.talent_strategist_messages.append({"role": "user", "content": prompt})
-
-        # Placeholder for AI response (will be implemented with actual LLM integration)
-        with st.chat_message("assistant"):
-            st.write(
-                "Thank you for that information! [Placeholder: AI Talent Strategist response will be implemented here]"
-            )
-            st.session_state.talent_strategist_messages.append(
-                {
-                    "role": "assistant",
-                    "content": "Thank you for that information! [Placeholder: AI Talent Strategist response will be implemented here]",
-                }
-            )
-
-        st.rerun()
-
-    # Reset interview button
-    if st.button("🔄 Reset Interview", use_container_width=True):
-        st.session_state.talent_strategist_messages = [
-            {
-                "role": "assistant",
-                "content": "Hello! I'm your AI Talent Strategist. I'll help you discover the perfect vacancy opportunities. Let's start by understanding your technical skills, career goals, and preferences. What are your main technical skills?",
-            }
-        ]
-        st.session_state.interview_complete = False
-        st.rerun()
-
-    # Complete interview button (placeholder)
-    if st.button("✅ Complete Interview", type="primary", use_container_width=True):
-        st.session_state.interview_complete = True
-        st.success("Interview completed! Your persona will be used for vacancy matching.")
-        st.rerun()
-
-# Tab 5: Vacancy Search
-with tab5:
-    st.header("🔍 Vacancy Search")
-    st.markdown(
-        "Search for vacancies using filters from the pre-indexed database."
-    )
+# ============================================================================
+# TAB 2: MANUAL SEARCH (Filters + Search)
+# ============================================================================
+with tab_search:
+    st.header("🔍 Manual Search")
+    st.markdown("Search for vacancies using filters from the pre-indexed database.")
     
     # Display search mode status
     st.info("✅ Search Mode: Database (Verified)")
-
-    # Search form
+    
+    # Search form - All filters inside this tab
     col1, col2 = st.columns(2)
-
+    
     with col1:
         role = st.text_input("Role / Title", placeholder="e.g., MLOps Engineer, ML Director")
         industry = st.text_input("Industry", placeholder="e.g., Logistics, FreightTech")
@@ -965,11 +787,11 @@ with tab5:
             "Required Skills (comma-separated)", placeholder="e.g., Python, Kubernetes, Docker"
         )
         location = st.text_input("Location", placeholder="e.g., San Francisco, Remote")
-
+    
     with col2:
         min_salary = st.number_input("Minimum Salary", min_value=0, value=0, step=10000)
         is_remote = st.checkbox("Remote Work Available")
-
+        
         # Company stages - must match CompanyStage enum values exactly
         st.subheader("Company Stages")
         seed = st.checkbox("Seed", value=False)
@@ -977,25 +799,25 @@ with tab5:
         growth = st.checkbox("Growth (Series B or later)", value=False)
         employees_1_10 = st.checkbox("1-10 employees", value=False)
         employees_10_100 = st.checkbox("10-100 employees", value=False)
-
+        
         # Build company stages list with exact enum values
         company_stages = []
         if seed:
             company_stages.append("Seed")
         if series_a:
-            company_stages.append("Series A")  # Exact match to enum value
+            company_stages.append("Series A")
         if growth:
-            company_stages.append("Growth (Series B or later)")  # Exact match to enum value
+            company_stages.append("Growth (Series B or later)")
         if employees_1_10:
-            company_stages.append("1-10 employees")  # Exact match to enum value
+            company_stages.append("1-10 employees")
         if employees_10_100:
-            company_stages.append("10-100 employees")  # Exact match to enum value
-
+            company_stages.append("10-100 employees")
+    
     # Search button
-    if st.button("🔍 Search Vacancies", type="primary", use_container_width=True):
+    if st.button("🔍 Search Database", type="primary", use_container_width=True):
         # Build filter parameters
         filter_params = {}
-
+        
         if role:
             filter_params["role"] = role
         if industry:
@@ -1010,13 +832,12 @@ with tab5:
             filter_params["is_remote"] = True
         if company_stages:
             filter_params["company_stages"] = company_stages
-
-        # Make API request
+        
+        # Make API request to search endpoint
         try:
-            # Build endpoint URL using BACKEND_API_URL (resolves to http://api:8000 in Docker)
             search_endpoint = f"{BACKEND_API_URL}/api/v1/vacancies/search"
             logger.info(f"Searching vacancies at: {search_endpoint}")
-
+            
             with st.spinner("🔍 Searching for vacancies..."):
                 with httpx.Client(timeout=120.0) as client:
                     # Always use Pinecone database (use_firecrawl=False by default)
@@ -1028,38 +849,38 @@ with tab5:
                     )
                     response.raise_for_status()
                     vacancies = response.json()
-
+            
             if vacancies:
                 st.success(f"✅ Found {len(vacancies)} vacancy/vacancies")
                 st.markdown("---")
-
+                
                 # Display vacancies in cards
                 for idx, vacancy in enumerate(vacancies):
                     with st.container():
                         col1, col2 = st.columns([3, 1])
-
+                        
                         with col1:
                             st.subheader(f"💼 {vacancy['title']}")
                             st.markdown(
                                 f"**Company:** {vacancy['company_name']} | **Stage:** {vacancy['company_stage']} | **Industry:** {vacancy['industry']}"
                             )
                             st.markdown(f"📍 **Location:** {vacancy['location']}")
-
+                            
                             if vacancy.get("salary_range"):
                                 st.markdown(f"💰 **Salary:** {vacancy['salary_range']}")
-
+                            
                             if vacancy.get("required_skills"):
                                 skills_str = ", ".join(
                                     [f"`{skill}`" for skill in vacancy["required_skills"]]
                                 )
                                 st.markdown(f"**Skills:** {skills_str}")
-
+                            
                             if vacancy.get("remote_option"):
                                 st.markdown(
                                     '<span style="background-color: #10b981; color: white; padding: 0.25rem 0.75rem; border-radius: 0.5rem; font-size: 0.875rem; font-weight: 500;">🌐 Remote</span>',
                                     unsafe_allow_html=True,
                                 )
-
+                        
                         with col2:
                             if vacancy.get("description_url"):
                                 st.link_button(
@@ -1067,43 +888,260 @@ with tab5:
                                     vacancy["description_url"],
                                     use_container_width=True,
                                 )
-
+                        
                         if idx < len(vacancies) - 1:
                             st.markdown("---")
             else:
                 st.info("🔍 No vacancies found matching your criteria. Try adjusting your filters.")
-
+        
         except httpx.HTTPStatusError as e:
-            # Extract error detail from response
             error_detail = e.response.text[:200] if e.response.text else "Unknown error"
             try:
                 error_json = e.response.json()
                 error_detail = error_json.get("detail", error_detail)
             except:
                 pass
-
+            
             st.error(f"❌ API Error ({e.response.status_code}): {error_detail}")
-
-            # Provide helpful guidance based on error
+            
             if e.response.status_code == 503 and "firecrawl" in error_detail.lower():
-                st.info(
-                    "💡 This error indicates Firecrawl is not properly configured. Check the health status above."
-                )
+                st.info("💡 This error indicates Firecrawl is not properly configured. Check the health status in the sidebar.")
             elif e.response.status_code == 401:
-                st.info(
-                    "💡 Authentication failed. Please verify FIRECRAWL_API_KEY in your .env file."
-                )
+                st.info("💡 Authentication failed. Please verify FIRECRAWL_API_KEY in your .env file.")
         except httpx.RequestError as e:
             st.error(f"❌ Connection Error: {str(e)}")
-            st.info(
-                f"💡 Cannot reach backend at {BACKEND_API_URL}. Check if the API service is running."
-            )
+            st.info(f"💡 Cannot reach backend at {BACKEND_API_URL}. Check if the API service is running.")
         except Exception as e:
             st.error(f"❌ Unexpected Error: {str(e)}")
 
-# Tab 6: System Diagnostics
-with tab6:
-    st.header("🔧 System Diagnostics")
+# ============================================================================
+# TAB 3: CV ANALYSIS (Upload, Process, Match)
+# ============================================================================
+with tab_cv:
+    st.header("📄 CV Analysis")
+    
+    # Radio button navigation for CV Analysis tools
+    cv_mode = st.radio(
+        "Select Tool",
+        ["📤 Upload CV", "💼 Process Vacancy", "🎯 Find Matches"],
+        horizontal=True,
+        label_visibility="collapsed"
+    )
+    
+    st.markdown("---")
+    
+    # CV Upload
+    if cv_mode == "📤 Upload CV":
+        st.subheader("Upload Candidate Resume")
+        st.markdown("Upload a PDF resume to process and index it for matching.")
+        
+        user_id = st.text_input(
+            "Candidate ID (User ID)",
+            value="",
+            help="Enter a unique identifier for the candidate (e.g., email, username, or UUID)",
+        )
+        
+        uploaded_file = st.file_uploader(
+            "Choose a PDF file", type=["pdf"], help="Upload a PDF resume file"
+        )
+        
+        if st.button("Process CV", type="primary", use_container_width=True):
+            if not user_id:
+                st.error("Please enter a Candidate ID")
+            elif not uploaded_file:
+                st.error("Please upload a PDF file")
+            else:
+                # Progress bar for CV processing
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                try:
+                    status_text.text("📤 Uploading CV file...")
+                    progress_bar.progress(10)
+                    
+                    status_text.text("🔄 Converting PDF to text...")
+                    progress_bar.progress(30)
+                    
+                    status_text.text("🧠 Generating embeddings...")
+                    progress_bar.progress(50)
+                    
+                    status_text.text("💾 Saving to database...")
+                    progress_bar.progress(70)
+                    
+                    result = process_cv_upload(uploaded_file, user_id)
+                    
+                    progress_bar.progress(100)
+                    status_text.text("✅ Processing complete!")
+                    
+                    st.success(f"✅ CV processed successfully!")
+                    st.json(result)
+                    st.info(
+                        f"**Resume ID:** {result.get('resume_id')}\n\n**Chunks Processed:** {result.get('chunks_processed')}"
+                    )
+                    
+                    # Clear progress after a moment
+                    time.sleep(0.5)
+                    progress_bar.empty()
+                    status_text.empty()
+                    
+                except Exception as e:
+                    progress_bar.empty()
+                    status_text.empty()
+                    st.error(f"❌ Error: {str(e)}")
+                    logger.error(f"CV processing error: {str(e)}")
+    
+    # Process Vacancy
+    elif cv_mode == "💼 Process Vacancy":
+        st.subheader("Process Vacancy Description")
+        st.markdown("Paste a vacancy description to process and index it for matching.")
+        
+        vacancy_id_input = st.text_input(
+            "Vacancy ID (Optional)",
+            value="",
+            help="Enter a unique identifier for the vacancy. Leave empty to auto-generate.",
+        )
+        
+        vacancy_text = st.text_area(
+            "Vacancy Description",
+            height=300,
+            placeholder="Paste the full vacancy description here...",
+            help="Enter the complete text description of the vacancy",
+        )
+        
+        if st.button("Process Vacancy", type="primary", use_container_width=True):
+            if not vacancy_text.strip():
+                st.error("Please enter a vacancy description")
+            else:
+                # Progress bar for vacancy processing
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                try:
+                    vacancy_id = vacancy_id_input.strip() if vacancy_id_input.strip() else None
+                    
+                    status_text.text("📝 Processing vacancy text...")
+                    progress_bar.progress(20)
+                    
+                    status_text.text("🧠 Generating embeddings...")
+                    progress_bar.progress(50)
+                    
+                    status_text.text("💾 Saving to database...")
+                    progress_bar.progress(80)
+                    
+                    result = process_vacancy(vacancy_text, vacancy_id)
+                    
+                    progress_bar.progress(100)
+                    status_text.text("✅ Processing complete!")
+                    
+                    st.success(f"✅ Vacancy processed successfully!")
+                    st.json(result)
+                    st.info(
+                        f"**Vacancy ID:** {result.get('vacancy_id')}\n\n**Chunks Processed:** {result.get('chunks_processed')}"
+                    )
+                    
+                    # Clear progress after a moment
+                    time.sleep(0.5)
+                    progress_bar.empty()
+                    status_text.empty()
+                    
+                except Exception as e:
+                    progress_bar.empty()
+                    status_text.empty()
+                    st.error(f"❌ Error: {str(e)}")
+                    logger.error(f"Vacancy processing error: {str(e)}")
+    
+    # Find Matches
+    elif cv_mode == "🎯 Find Matches":
+        st.subheader("Find Candidate Matches")
+        st.markdown("Enter a candidate ID to find matching vacancies.")
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            candidate_id = st.text_input(
+                "Candidate ID",
+                value="",
+                help="Enter the candidate ID (user_id) that was used when uploading the CV",
+            )
+        
+        with col2:
+            top_k = st.number_input(
+                "Number of Matches",
+                min_value=1,
+                max_value=50,
+                value=10,
+                help="Number of top matches to return",
+            )
+        
+        if st.button("Find Matches", type="primary", use_container_width=True):
+            if not candidate_id:
+                st.error("Please enter a Candidate ID")
+            else:
+                # Progress bar for matching
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                try:
+                    status_text.text("🔍 Fetching candidate profile...")
+                    progress_bar.progress(20)
+                    
+                    status_text.text("📊 Searching for matching vacancies...")
+                    progress_bar.progress(50)
+                    
+                    status_text.text("🤖 Analyzing matches with AI...")
+                    progress_bar.progress(75)
+                    
+                    matches = get_matches(candidate_id, top_k)
+                    
+                    progress_bar.progress(100)
+                    status_text.text("✅ Matching complete!")
+                    
+                    # Clear progress after a moment
+                    time.sleep(0.5)
+                    progress_bar.empty()
+                    status_text.empty()
+                    
+                    if not matches:
+                        st.warning("No matches found for this candidate.")
+                    else:
+                        st.success(f"✅ Found {len(matches)} matches!")
+                        st.markdown("---")
+                        
+                        # Display matches
+                        for idx, match in enumerate(matches):
+                            display_match_result(match, idx)
+                        
+                        # Summary statistics
+                        st.markdown("---")
+                        st.subheader("📊 Summary Statistics")
+                        avg_score = sum(m.score for m in matches) / len(matches) * 100
+                        max_score = max(m.score for m in matches) * 100
+                        min_score = min(m.score for m in matches) * 100
+                        
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Average Match", f"{avg_score:.1f}%")
+                        with col2:
+                            st.metric("Best Match", f"{max_score:.1f}%")
+                        with col3:
+                            st.metric("Lowest Match", f"{min_score:.1f}%")
+                
+                except ValueError as e:
+                    progress_bar.empty()
+                    status_text.empty()
+                    st.error(f"❌ {str(e)}")
+                    st.info("💡 Make sure you've uploaded a CV for this candidate ID first.")
+                except Exception as e:
+                    progress_bar.empty()
+                    status_text.empty()
+                    st.error(f"❌ Error: {str(e)}")
+                    logger.error(f"Match finding error: {str(e)}")
+
+# ============================================================================
+# TAB 4: DIAGNOSTICS (System Diagnostics)
+# ============================================================================
+with tab_diagnostics:
+    st.header("🛠️ System Diagnostics")
     st.markdown("Run a comprehensive health check on all backend services and dependencies.")
 
     # Initialize session state for diagnostics
@@ -1154,27 +1192,22 @@ with tab6:
                                 logger.info(f"Successfully retrieved diagnostics from: {url}")
                                 break
                         except socket.gaierror as e:
-                            # DNS resolution error - show full URL for debugging
                             error_msg = f"API not reachable at {url}. DNS resolution failed. Please verify BACKEND_API_URL configuration."
                             last_error = error_msg
                             logger.error(f"DNS resolution error in diagnostics: {error_msg}")
-                            # Don't retry DNS errors
                             raise Exception(error_msg) from e
                         except httpx.HTTPStatusError as e:
                             last_error = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
                             logger.warning(f"Failed to get diagnostics from {url}: {last_error}")
                             if attempt < max_retries - 1:
-                                # Retry after delay
                                 time.sleep(retry_delay)
                                 continue
                             if e.response.status_code != 404:
-                                # If it's not a 404, don't try the fallback
                                 raise
                         except httpx.RequestError as e:
                             last_error = f"Connection error: {str(e)}"
                             logger.warning(f"Connection error calling {url}: {last_error}")
                             if attempt < max_retries - 1:
-                                # Retry after delay
                                 time.sleep(retry_delay)
                                 continue
                             raise
@@ -1182,7 +1215,6 @@ with tab6:
                             last_error = str(e)
                             logger.warning(f"Error calling {url}: {last_error}")
                             if attempt < max_retries - 1:
-                                # Retry after delay
                                 time.sleep(retry_delay)
                                 continue
                             if "404" not in str(e).lower():
@@ -1199,7 +1231,7 @@ with tab6:
 
             except socket.gaierror as e:
                 st.session_state.diagnostics_running = False
-                error_msg = f"API not reachable at {BACKEND_API_URL}. DNS resolution failed. Full URL attempted: {BACKEND_API_URL}/api/v1/system/diagnostics"
+                error_msg = f"API not reachable at {BACKEND_API_URL}. DNS resolution failed."
                 st.error(f"❌ {error_msg}")
                 logger.error(f"DNS resolution error in diagnostics: {error_msg}")
                 st.session_state.diagnostics_result = None
@@ -1207,29 +1239,18 @@ with tab6:
                 st.session_state.diagnostics_running = False
                 error_detail = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
                 st.error(f"❌ Failed to get diagnostics: {error_detail}")
-                st.error(f"💡 Tried URLs: {', '.join(diagnostics_urls)}")
-                st.error(f"🔗 Full URL attempted: {BACKEND_API_URL}/api/v1/system/diagnostics")
                 logger.error(f"Diagnostics failed: {error_detail}")
                 st.session_state.diagnostics_result = None
             except httpx.RequestError as e:
                 st.session_state.diagnostics_running = False
                 error_msg = f"Connection error: {str(e)}"
                 st.error(f"❌ {error_msg}")
-                st.error(f"🔗 Full URL attempted: {BACKEND_API_URL}/api/v1/system/diagnostics")
                 logger.error(f"Diagnostics connection error: {error_msg}")
                 st.session_state.diagnostics_result = None
             except Exception as e:
                 st.session_state.diagnostics_running = False
                 error_msg = str(e)
                 st.error(f"❌ {error_msg}")
-                st.error(f"🔗 Full URL attempted: {BACKEND_API_URL}/api/v1/system/diagnostics")
-                # Check if it's a DNS error wrapped in another exception
-                if "not reachable" in error_msg or "gaierror" in error_msg.lower():
-                    dns_error_msg = f"API not reachable at {BACKEND_API_URL}. Please verify BACKEND_API_URL configuration."
-                    st.error(f"❌ {dns_error_msg}")
-                else:
-                    st.error(f"❌ Error running diagnostics: {error_msg}")
-                    st.error(f"💡 Backend API URL: {BACKEND_API_URL}")
                 logger.error(f"Diagnostics error: {error_msg}")
                 st.session_state.diagnostics_result = None
 
@@ -1313,45 +1334,10 @@ with tab6:
                 if error:
                     st.error(f"**Error:** {error}")
 
-                    # Special handling for 404 errors
                     if error_type == "404":
-                        st.warning(
-                            "⚠️ **Routing/Configuration Error:** The service endpoint was not found. Check service configuration and routing."
-                        )
-
-                    # Special handling for timeouts
+                        st.warning("⚠️ **Routing/Configuration Error:** The service endpoint was not found.")
                     if error_type == "timeout":
-                        st.warning(
-                            "⏱️ **Timeout:** The service did not respond in time. It may be starting up (cold start)."
-                        )
-
-                        # Force wake up button
-                        if st.button(
-                            f"🔨 Force Wake Up {display_name}", key=f"wakeup_{service_name}"
-                        ):
-                            with st.spinner(f"Waking up {display_name}..."):
-                                try:
-                                    # Send multiple light requests to wake up the service
-                                    wakeup_url = None
-                                    if service_name == "cv_processor":
-                                        wakeup_url = f"{CV_PROCESSOR_URL}/health"
-                                    elif service_name == "embedding_service":
-                                        wakeup_url = f"{EMBEDDING_SERVICE_URL}/health"
-
-                                    if wakeup_url:
-                                        for i in range(3):
-                                            try:
-                                                with httpx.Client(timeout=5.0) as client:
-                                                    client.get(wakeup_url)
-                                            except:
-                                                pass
-                                            time.sleep(1)
-                                        st.success(f"Sent wake-up requests to {display_name}")
-                                        st.info(
-                                            "💡 Run diagnostics again to check if the service is now available."
-                                        )
-                                except Exception as e:
-                                    st.error(f"Failed to wake up service: {str(e)}")
+                        st.warning("⏱️ **Timeout:** The service did not respond in time. It may be starting up (cold start).")
 
         st.markdown("---")
 

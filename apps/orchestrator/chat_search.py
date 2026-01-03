@@ -220,3 +220,4 @@ Generate a friendly 2-3 sentence summary explaining why these vacancies match th
                 f"Here are the top opportunities that align with your criteria."
             )
 
+

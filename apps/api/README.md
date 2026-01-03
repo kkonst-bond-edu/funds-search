@@ -150,3 +150,4 @@ The chat search endpoint uses:
 - **VectorStore**: Pinecone for semantic search
 - **Embedding Service**: Generates query embeddings
 
+
