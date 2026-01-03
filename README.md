@@ -1,5 +1,9 @@
 # Autonomous Job Hunter: Multi-Agent RAG Matching System
 
+
+[![Deploy Embedding Service to Azure Container Apps](https://github.com/kkonst-bond-edu/funds-search/actions/workflows/deploy-embedding.yml/badge.svg)](https://github.com/kkonst-bond-edu/funds-search/actions/workflows/deploy-embedding.yml)
+
+
 **Version: 2.0.0 (MVP)**
 
 Production-ready autonomous job discovery and matching system using LangGraph orchestration, semantic embeddings (BGE-M3), and AI reasoning (Gemini).
