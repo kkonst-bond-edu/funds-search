@@ -25,7 +25,7 @@ Production-ready autonomous job discovery and matching system using LangGraph or
 - Processes and indexes vacancy descriptions in Pinecone namespace `"vacancies"`
 - Matches candidates with vacancies using semantic similarity (BGE-M3 embeddings)
 - Generates AI explanations (Gemini) explaining why each vacancy fits the candidate
-- Provides a user-friendly web interface with AI Talent Strategist chat interface
+- Provides a chat-first web interface where users interact with an AI recruiter in natural language to search for vacancies at a16z portfolio companies
 
 **Current Working State**: 
 - ✅ CV processing and storage in namespace `"cvs"` with metadata `type: 'cv'`
@@ -42,6 +42,7 @@ Production-ready autonomous job discovery and matching system using LangGraph or
 - ✅ Robust CompanyStage enum comparison
 - ✅ Streamlit UI with Vacancy Search tab
 - ✅ Security: API key masking in logs
+- ✅ **Chat-First Interface**: Conversational job hunting with AI recruiter that interprets natural language queries and displays results in chat format
 
 **Upcoming Roadmap**:
 - 🔄 Full Talent Strategist interview processing logic
@@ -152,6 +153,17 @@ graph TD
     MM -->|Final Response| UI
 ```
 
+## 📋 Agent Roles (The Agentic Fleet)
+
+In this architecture, we move away from a single "all-powerful" bot and adopt a fleet of specialized agents. Each agent has a narrow responsibility and a model/tooling profile optimized for its job.
+
+| Agent Name | Role | Model (Provider) | Responsibility |
+|---|---|---|---|
+| **Talent Strategist 🕵️‍♂️** | Profiler | DeepSeek V3 (Cheap/Fast) | Analyzes the user's PDF/CV, extracts the essential skills and experience, and produces a structured JSON user persona. |
+| **Job Scout 🛰️** | Intent Extractor | DeepSeek R1 (Reasoning) | Interprets the user's message (e.g., "something like Google, but in crypto") and converts it into structured tags/filters plus a vector-search query. |
+| **Matchmaker 🤝** | RAG Logic | GPT-4o / Claude 3.5 | The "smartest" agent: takes the top 10 matches from the vector database and compares them to the user persona, explaining why each match is a strong fit (e.g., "95% match"). |
+| **Hunter Agent 🏹** | Real-time Scraper | Firecrawl / APIs | Wakes up when the local index is empty or stale; fetches fresh jobs from VC/fund websites and returns data for indexing. |
+
 ## Component Descriptions
 
 ### Apps (`apps/`)
@@ -159,7 +171,7 @@ graph TD
 | Component | Port | Description |
 |-----------|------|-------------|
 | **api** | 8000 | FastAPI REST API + LangGraph orchestrator. Multi-stage Docker build (<500MB image). |
-| **web_ui** | 8501 | Streamlit dashboard for CV upload and match viewing. Requires `BACKEND_API_URL` and `CV_PROCESSOR_URL` env vars. |
+| **web_ui** | 8501 | Streamlit chat-first interface for conversational job hunting. Users interact with an AI recruiter in natural language to search for vacancies. Supports both chat-based search and traditional filter-based search. Requires `BACKEND_API_URL` and `CV_PROCESSOR_URL` env vars. |
 | **orchestrator** | - | LangGraph state machines for search and matching workflows. Two graphs: search workflow and matching workflow. |
 
 ### Services (`services/`)
