@@ -95,6 +95,51 @@ graph TB
     style Schemas fill:#e8f5e9
 ```
 
+## System Design: Conversational AI Agent Architecture
+
+```mermaid
+graph TD
+    subgraph "Client Side (Streamlit)"
+        UI[Web UI: Chat Interface]
+        SS[Session State: History]
+    end
+
+    subgraph "Application Layer (FastAPI)"
+        ORC[Orchestrator: ChatSearchAgent]
+        API[API Gateway /api/v1/vacancies/chat]
+    end
+
+    subgraph "AI & Reasoning Layer"
+        LLM[DeepSeek: Intent Interpreter]
+        RS[Response Synthesizer]
+    end
+
+    subgraph "Internal Microservices"
+        EMB[Embedding Service: BGE-M3]
+        CV[CV Processor: PDF Parser]
+    end
+
+    subgraph "Data Layer"
+        PC[(Pinecone: Vector DB)]
+        JSON[(Local Cache: vacancies_dump.json)]
+    end
+
+    %% Flow: User Query
+    UI -->|1. Natural Language| API
+    API -->|2. Message| ORC
+    ORC -->|3. Extraction Prompt| LLM
+    LLM -->|4. Structured Filters| ORC
+    ORC -->|5. Text for Vector| EMB
+    EMB -->|6. Query Vector| PC
+    PC -->|7. Top Matches| ORC
+    ORC -->|8. Context + Results| RS
+    RS -->|9. Human Response| UI
+
+    %% Future CV Flow
+    UI -.->|Upload PDF| CV
+    CV -.->|Extracted Text| ORC
+```
+
 ## Component Descriptions
 
 ### Apps (`apps/`)

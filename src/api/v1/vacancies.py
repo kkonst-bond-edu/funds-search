@@ -28,6 +28,8 @@ from src.services.exceptions import (
     FirecrawlRateLimitError,
     FirecrawlConnectionError,
 )
+from apps.orchestrator.chat_search import ChatSearchAgent
+from pydantic import BaseModel, Field
 
 # Load environment variables
 load_dotenv()
@@ -49,6 +51,11 @@ logger = structlog.get_logger()
 
 # Create router
 router = APIRouter(prefix="/api/v1/vacancies", tags=["vacancies"])
+
+
+class ChatRequest(BaseModel):
+    """Request schema for chat endpoint."""
+    message: str = Field(..., description="Natural language search query")
 
 
 def get_mock_vacancies() -> list[Vacancy]:
@@ -494,6 +501,131 @@ async def search_vacancies(
         logger.error("vacancy_search_error", error=str(e), error_type=type(e).__name__)
         raise HTTPException(
             status_code=500, detail=f"Error performing vacancy search: {str(e)}"
+        ) from e
+
+
+@router.post("/chat")
+async def chat_search(request: ChatRequest) -> Dict[str, Any]:
+    """
+    Conversational vacancy search endpoint.
+    
+    Accepts natural language messages and converts them to search queries,
+    then returns matching vacancies with an AI-generated summary.
+    
+    Args:
+        request: ChatRequest with user's natural language message
+        
+    Returns:
+        Dictionary with:
+        - vacancies: List of Vacancy objects
+        - summary: AI-generated summary explaining the results
+        
+    Raises:
+        HTTPException: If search fails
+    """
+    try:
+        logger.info("chat_search_requested", message_length=len(request.message))
+        
+        # Initialize chat search agent
+        chat_agent = ChatSearchAgent()
+        
+        # Interpret user message to extract search parameters
+        extracted_params = await chat_agent.interpret_message(request.message)
+        
+        logger.info(
+            "chat_params_extracted",
+            role=extracted_params.get("role"),
+            skills=extracted_params.get("skills"),
+            industry=extracted_params.get("industry"),
+            location=extracted_params.get("location"),
+            company_stage=extracted_params.get("company_stage"),
+        )
+        
+        # Convert extracted parameters to VacancyFilter
+        filter_params = VacancyFilter(
+            role=extracted_params.get("role"),
+            skills=extracted_params.get("skills") or [],
+            industry=extracted_params.get("industry"),
+            location=extracted_params.get("location"),
+            company_stages=[extracted_params.get("company_stage")] if extracted_params.get("company_stage") else None,
+        )
+        
+        # Normalize company_stages if present
+        if filter_params.company_stages:
+            normalized_company_stages = [
+                CompanyStage.get_stage_value(stage) for stage in filter_params.company_stages
+            ]
+            filter_params.company_stages = normalized_company_stages
+        
+        # Get embedding service URL
+        embedding_service_url = os.getenv(
+            "EMBEDDING_SERVICE_URL",
+            "http://embedding-service:8001"
+        )
+        
+        # Build search query from filter parameters
+        search_query = build_search_query(filter_params)
+        logger.info("chat_search_query_built", query=search_query)
+        
+        # Get embedding for search query
+        query_embedding = await get_query_embedding(search_query, embedding_service_url)
+        logger.info("chat_query_embedding_generated", dim=len(query_embedding))
+        
+        # Build Pinecone filter
+        pinecone_filter = build_pinecone_filter(filter_params)
+        logger.info("chat_pinecone_filter_built", filter=pinecone_filter)
+        
+        # Initialize Pinecone client
+        vector_store = VectorStore()
+        
+        # Query Pinecone
+        top_k = 50  # Get more results, then filter in Python
+        results = vector_store.query(
+            query_vector=query_embedding,
+            top_k=top_k,
+            filter_dict=pinecone_filter,
+            namespace="vacancies",
+            include_values=False
+        )
+        
+        logger.info("chat_pinecone_query_completed", results_count=len(results))
+        
+        # Convert metadata to Vacancy objects
+        vacancies = []
+        for result in results:
+            try:
+                vacancy = metadata_to_vacancy(result["metadata"])
+                vacancies.append(vacancy)
+            except Exception as e:
+                logger.warning("chat_vacancy_conversion_failed", error=str(e), metadata=result.get("metadata", {}))
+                continue
+        
+        # Apply additional filters in Python (for industry, location with case-insensitive matching)
+        filtered_vacancies = filter_vacancies(vacancies, filter_params)
+        
+        logger.info(
+            "chat_vacancy_search_completed",
+            total_results=len(filtered_vacancies),
+            initial_results=len(vacancies)
+        )
+        
+        # Generate AI summary of results
+        summary = await chat_agent.format_results_summary(filtered_vacancies, request.message)
+        
+        logger.info("chat_search_completed", summary_length=len(summary))
+        
+        return {
+            "vacancies": filtered_vacancies,
+            "summary": summary
+        }
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.error("chat_search_error", error=str(e), error_type=type(e).__name__)
+        raise HTTPException(
+            status_code=500, detail=f"Error performing chat search: {str(e)}"
         ) from e
 
 
