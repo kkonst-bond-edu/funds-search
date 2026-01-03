@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Funds Search API",
     description="Search and match job openings at VC funds using Multi-Agent RAG",
-    version="2.0.0"
+    version="2.1.1"
 )
 
 # Add CORS middleware

@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2025-01-03
+
+### Added
+- **Integration Tests for Chat API**: Comprehensive test suite for `/api/v1/vacancies/chat` endpoint
+  - Created `tests/integration/test_chat_api.py` with full endpoint coverage
+  - Tests verify response structure (summary and vacancies list)
+  - Mocked ChatSearchAgent methods to avoid LLM calls during CI
+  - Tests validate data flow through the endpoint
+  - Added `scripts/run_tests.sh` for easy test execution
+
+### Testing
+- Integration tests can be run via `pytest tests/integration` or `docker-compose exec api pytest tests/integration/test_chat_api.py`
+- All tests use mocks to avoid external API calls during CI/CD
+
 ## [2.1.0] - 2025-01-03
 
 ### Added
