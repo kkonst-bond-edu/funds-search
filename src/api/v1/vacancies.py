@@ -4,9 +4,12 @@ Supports both mock data and Firecrawl-based real search.
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
+from typing import Dict, Any, Optional, List
 
+import httpx
 import structlog
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException, Query
@@ -17,6 +20,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from src.schemas.vacancy import VacancyFilter, Vacancy, CompanyStage
+from shared.pinecone_client import VectorStore
 from src.services.firecrawl_service import FirecrawlService
 from src.services.exceptions import (
     FirecrawlAuthError,
@@ -92,6 +96,7 @@ def get_mock_vacancies() -> list[Vacancy]:
 def filter_vacancies(vacancies: list[Vacancy], filter_params: VacancyFilter) -> list[Vacancy]:
     """
     Filter vacancies based on filter parameters.
+    Uses case-insensitive substring matching for industry and location.
 
     Args:
         vacancies: List of vacancies to filter
@@ -132,6 +137,7 @@ def filter_vacancies(vacancies: list[Vacancy], filter_params: VacancyFilter) -> 
         ]
 
     if filter_params.industry:
+        # Case-insensitive substring matching
         industry_lower = filter_params.industry.lower()
         filtered = [v for v in filtered if industry_lower in v.industry.lower()]
 
@@ -162,23 +168,176 @@ def get_firecrawl_service() -> FirecrawlService:
     return FirecrawlService()
 
 
+def build_search_query(filter_params: VacancyFilter) -> str:
+    """
+    Build search query text from filter parameters for embedding generation.
+    If role and skills are empty, still returns a query to allow filtering by other criteria.
+    
+    Args:
+        filter_params: VacancyFilter with search criteria
+        
+    Returns:
+        Search query text string
+    """
+    query_parts = []
+    
+    if filter_params.role:
+        query_parts.append(f"Title: {filter_params.role}")
+    
+    if filter_params.skills:
+        skills_str = ", ".join(filter_params.skills)
+        query_parts.append(f"Skills: {skills_str}")
+    
+    # If no role or skills, use a generic search query that will match all vacancies
+    # This allows filtering by industry, location, etc. even without role/skills
+    if not query_parts:
+        query_parts.append("job vacancy")
+    
+    return ". ".join(query_parts) + "."
+
+
+def build_pinecone_filter(filter_params: VacancyFilter) -> Optional[Dict[str, Any]]:
+    """
+    Build Pinecone filter dictionary from filter parameters.
+    
+    Args:
+        filter_params: VacancyFilter with search criteria
+        
+    Returns:
+        Pinecone filter dictionary or None
+    """
+    filter_dict = {}
+    
+    # Pinecone supports exact matches and contains for strings
+    # For industry, we can use exact match if provided
+    if filter_params.industry:
+        # Use $in for partial matching (Pinecone doesn't support case-insensitive contains directly)
+        # We'll do case-insensitive filtering in Python instead
+        pass
+    
+    # For location, we can try exact match, but will also filter in Python
+    if filter_params.location:
+        # Similar to industry, we'll filter in Python for better matching
+        pass
+    
+    # For remote_option, we can use exact boolean match
+    if filter_params.is_remote is not None:
+        filter_dict["remote_option"] = {"$eq": filter_params.is_remote}
+    
+    # For company_stage, we can use $in for multiple values
+    # Normalize the strings to ensure they match enum values (e.g., 'SeriesA' -> 'Series A')
+    if filter_params.company_stages:
+        normalized_stages = [CompanyStage.get_stage_value(s) for s in filter_params.company_stages]
+        filter_dict["company_stage"] = {"$in": normalized_stages}
+    
+    return filter_dict if filter_dict else None
+
+
+async def get_query_embedding(query_text: str, embedding_service_url: str) -> List[float]:
+    """
+    Get embedding for search query from embedding-service.
+    
+    Args:
+        query_text: Search query text
+        embedding_service_url: URL of the embedding service
+        
+    Returns:
+        Embedding vector as list of floats
+        
+    Raises:
+        HTTPException: If embedding service is unavailable
+    """
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{embedding_service_url}/embed",
+                json={"texts": [query_text]}
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            if "embeddings" not in result or not result["embeddings"]:
+                raise ValueError("Invalid response from embedding service")
+            
+            return result["embeddings"][0]
+    except httpx.TimeoutException as e:
+        logger.error("embedding_service_timeout", error=str(e))
+        raise HTTPException(
+            status_code=503, detail="Embedding service timeout"
+        ) from e
+    except httpx.HTTPStatusError as e:
+        logger.error("embedding_service_http_error", status_code=e.response.status_code, error=str(e))
+        raise HTTPException(
+            status_code=503, detail=f"Embedding service error: {str(e)}"
+        ) from e
+    except httpx.RequestError as e:
+        logger.error("embedding_service_unreachable", error=str(e))
+        raise HTTPException(
+            status_code=503, detail="Embedding service unavailable"
+        ) from e
+
+
+def metadata_to_vacancy(metadata: Dict[str, Any]) -> Vacancy:
+    """
+    Convert Pinecone metadata dictionary to Vacancy object.
+    
+    Args:
+        metadata: Metadata dictionary from Pinecone
+        
+    Returns:
+        Vacancy object
+    """
+    # Handle company_stage - it might be a string that needs normalization
+    company_stage_str = metadata.get("company_stage", "Growth (Series B or later)")
+    try:
+        # Try to match to enum
+        company_stage = CompanyStage(company_stage_str)
+    except ValueError:
+        # Use get_stage_value to normalize, then try again
+        normalized_stage = CompanyStage.get_stage_value(company_stage_str)
+        try:
+            company_stage = CompanyStage(normalized_stage)
+        except ValueError:
+            # Default to GROWTH if no match
+            company_stage = CompanyStage.GROWTH
+            logger.warning("unknown_company_stage", stage=company_stage_str, defaulted_to="GROWTH")
+    
+    return Vacancy(
+        title=metadata.get("title", "Unknown"),
+        company_name=metadata.get("company_name", "Unknown"),
+        company_stage=company_stage,
+        location=metadata.get("location", "Not specified"),
+        industry=metadata.get("industry", "Technology"),
+        salary_range=metadata.get("salary_range"),
+        description_url=metadata.get("description_url", ""),
+        required_skills=metadata.get("required_skills", []),
+        remote_option=metadata.get("remote_option", False),
+        source_url=metadata.get("source_url"),
+    )
+
+
 @router.post("/search", response_model=list[Vacancy])
 async def search_vacancies(
     filter_params: VacancyFilter,
     use_firecrawl: bool = Query(
-        False, description="Use Firecrawl for real search instead of mock data"
+        False, description="Use Firecrawl for real search instead of Pinecone"
+    ),
+    use_mock: bool = Query(
+        False, description="Use mock data instead of Pinecone"
     ),
 ) -> list[Vacancy]:
     """
-    Search for vacancies based on filter criteria.
+    Search for vacancies based on filter criteria using Pinecone vector search.
 
-    Supports two modes:
-    - Mock mode (default): Returns realistic mock vacancies for testing
+    Supports three modes:
+    - Pinecone mode (default): Fast vector search in pre-indexed Pinecone database
+    - Mock mode: Returns realistic mock vacancies for testing
     - Firecrawl mode: Fetches real vacancies from a16z jobs page using Firecrawl
 
     Args:
         filter_params: VacancyFilter with search criteria
         use_firecrawl: If True, use Firecrawl for real search (requires FIRECRAWL_API_KEY)
+        use_mock: If True, use mock data instead of Pinecone
 
     Returns:
         List of Vacancy objects matching the filter criteria
@@ -187,6 +346,16 @@ async def search_vacancies(
         HTTPException: If search fails
     """
     try:
+        # Normalize company_stages early using CompanyStage.get_stage_value
+        # This ensures 'SeriesA' becomes 'Series A', etc.
+        normalized_company_stages = None
+        if filter_params.company_stages:
+            normalized_company_stages = [
+                CompanyStage.get_stage_value(stage) for stage in filter_params.company_stages
+            ]
+            # Update filter_params with normalized stages for consistent use throughout
+            filter_params.company_stages = normalized_company_stages
+        
         # Log search request (never log API keys or sensitive data)
         logger.info(
             "vacancy_search_requested",
@@ -194,13 +363,23 @@ async def search_vacancies(
             skills=filter_params.skills,
             location=filter_params.location,
             is_remote=filter_params.is_remote,
-            company_stages=[CompanyStage.get_stage_value(s) for s in filter_params.company_stages]
-            if filter_params.company_stages
-            else None,
+            company_stages=normalized_company_stages,
             industry=filter_params.industry,
             min_salary=filter_params.min_salary,
             use_firecrawl=use_firecrawl,
+            use_mock=use_mock,
         )
+
+        if use_mock:
+            # Use mock data
+            all_vacancies = get_mock_vacancies()
+            filtered_vacancies = filter_vacancies(all_vacancies, filter_params)
+
+            logger.info(
+                "vacancy_search_completed", total_results=len(filtered_vacancies), source="mock"
+            )
+
+            return filtered_vacancies
 
         if use_firecrawl:
             # Use Firecrawl for real search - DO NOT fall back to mock on failure
@@ -241,16 +420,72 @@ async def search_vacancies(
                     "firecrawl_unexpected_error", error=str(e), error_type=type(e).__name__
                 )
                 raise HTTPException(status_code=500, detail=error_msg) from e
-        else:
-            # Use mock data
-            all_vacancies = get_mock_vacancies()
-            filtered_vacancies = filter_vacancies(all_vacancies, filter_params)
 
-            logger.info(
-                "vacancy_search_completed", total_results=len(filtered_vacancies), source="mock"
+        # Default: Use Pinecone for fast vector search
+        try:
+            # Get embedding service URL
+            embedding_service_url = os.getenv(
+                "EMBEDDING_SERVICE_URL",
+                "http://embedding-service:8001"
             )
-
+            
+            # Build search query from filter parameters
+            search_query = build_search_query(filter_params)
+            logger.info("search_query_built", query=search_query)
+            
+            # Get embedding for search query
+            query_embedding = await get_query_embedding(search_query, embedding_service_url)
+            logger.info("query_embedding_generated", dim=len(query_embedding))
+            
+            # Build Pinecone filter
+            pinecone_filter = build_pinecone_filter(filter_params)
+            logger.info("pinecone_filter_built", filter=pinecone_filter)
+            
+            # Initialize Pinecone client
+            vector_store = VectorStore()
+            
+            # Query Pinecone
+            top_k = 50  # Get more results, then filter in Python
+            results = vector_store.query(
+                query_vector=query_embedding,
+                top_k=top_k,
+                filter_dict=pinecone_filter,
+                namespace="vacancies",
+                include_values=False
+            )
+            
+            logger.info("pinecone_query_completed", results_count=len(results))
+            
+            # Convert metadata to Vacancy objects
+            vacancies = []
+            for result in results:
+                try:
+                    vacancy = metadata_to_vacancy(result["metadata"])
+                    vacancies.append(vacancy)
+                except Exception as e:
+                    logger.warning("vacancy_conversion_failed", error=str(e), metadata=result.get("metadata", {}))
+                    continue
+            
+            # Apply additional filters in Python (for industry, location with case-insensitive matching)
+            filtered_vacancies = filter_vacancies(vacancies, filter_params)
+            
+            logger.info(
+                "vacancy_search_completed",
+                total_results=len(filtered_vacancies),
+                source="pinecone",
+                initial_results=len(vacancies)
+            )
+            
             return filtered_vacancies
+            
+        except HTTPException:
+            # Re-raise HTTP exceptions
+            raise
+        except Exception as e:
+            logger.error("pinecone_search_error", error=str(e), error_type=type(e).__name__)
+            raise HTTPException(
+                status_code=500, detail=f"Error performing Pinecone search: {str(e)}"
+            ) from e
 
     except HTTPException:
         # Re-raise HTTP exceptions

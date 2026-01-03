@@ -21,16 +21,44 @@ class CompanyStage(str, Enum):
         """
         Robust helper to get stage value from Enum or string.
         Prevents "'str' object has no attribute 'value'" errors.
+        Handles a16z-specific stage strings.
 
         Args:
             stage: CompanyStage enum, string, or any value
 
         Returns:
-            String value of the stage
+            String value of the stage (normalized to enum value if possible)
         """
         if isinstance(stage, cls):
             return stage.value
         elif isinstance(stage, str):
+            # Normalize a16z-specific strings to enum values
+            stage_lower = stage.lower()
+            
+            # Map "Growth (Series B or later)" -> GROWTH
+            if "growth" in stage_lower or "series b" in stage_lower or "series c" in stage_lower:
+                return cls.GROWTH.value
+            
+            # Map "1000+ employees" -> GROWTH (large company = growth stage)
+            if "1000+" in stage or "1000 +" in stage_lower:
+                return cls.GROWTH.value
+            
+            # Map "Series A, 10–100 employees" -> SERIES_A (early stage with Series A)
+            if "series a" in stage_lower:
+                return cls.SERIES_A.value
+            
+            # Map employee count strings
+            if "1-10 employees" in stage_lower or "1–10 employees" in stage_lower:
+                return cls.EMPLOYEES_1_10.value
+            if "10-100 employees" in stage_lower or "10–100 employees" in stage_lower:
+                return cls.EMPLOYEES_10_100.value
+            
+            # If it matches an enum value exactly, return it
+            for enum_member in cls:
+                if stage == enum_member.value:
+                    return enum_member.value
+            
+            # Otherwise return the string as-is
             return stage
         elif hasattr(stage, "value"):
             return stage.value
@@ -45,7 +73,7 @@ class VacancyFilter(BaseModel):
     skills: Optional[List[str]] = Field(default_factory=list, description="Required skills list")
     location: Optional[str] = Field(None, description="Vacancy location filter")
     is_remote: Optional[bool] = Field(None, description="Remote work option filter")
-    company_stages: Optional[List[CompanyStage]] = Field(
+    company_stages: Optional[List[str]] = Field(
         default_factory=list, description="Company funding stages filter"
     )
     industry: Optional[str] = Field(None, description="Industry filter")

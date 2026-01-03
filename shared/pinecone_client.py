@@ -29,6 +29,17 @@ class VectorStore:
         logger.info(f"Upserting {len(vectors)} vectors to namespace: {namespace}")
         self.index.upsert(vectors=vectors, namespace=namespace)
     
+    def delete_all(self, namespace: str = "resumes"):
+        """
+        Delete all vectors from a namespace.
+        
+        Args:
+            namespace: Namespace to clear (default: "resumes")
+        """
+        logger.info(f"Deleting all vectors from namespace: {namespace}")
+        self.index.delete(delete_all=True, namespace=namespace)
+        logger.info(f"Successfully deleted all vectors from namespace: {namespace}")
+    
     def upsert_resume(self, resume: Resume, namespace: str = "cvs"):
         """Сохраняет все чанки резюме в Pinecone."""
         vectors = []

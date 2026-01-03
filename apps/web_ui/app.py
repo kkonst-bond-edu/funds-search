@@ -858,57 +858,11 @@ with tab4:
 with tab5:
     st.header("🔍 Vacancy Search")
     st.markdown(
-        "Search for vacancies using filters. Supports both mock data and real Firecrawl search."
+        "Search for vacancies using filters from the pre-indexed database."
     )
-
-    # Check Firecrawl configuration via backend health endpoint
-    # IMPORTANT: Do NOT check FIRECRAWL_API_KEY directly in UI - always query the API
-    firecrawl_configured = False
-    firecrawl_error = None
-
-    # Initialize session state for firecrawl_error if not exists
-    if "firecrawl_error" not in st.session_state:
-        st.session_state.firecrawl_error = None
-
-    try:
-        health_url = f"{BACKEND_API_URL}/api/v1/vacancies/health"
-        logger.info(f"Checking Firecrawl configuration via: {health_url}")
-        with httpx.Client(timeout=5.0) as client:
-            health_response = client.get(health_url)
-            if health_response.status_code == 200:
-                health_data = health_response.json()
-                firecrawl_configured = health_data.get("firecrawl_configured", False)
-                firecrawl_error = health_data.get("firecrawl_error")
-                logger.info(
-                    f"Firecrawl configured: {firecrawl_configured}, error: {firecrawl_error}"
-                )
-
-                # Store error message for display
-                st.session_state.firecrawl_error = firecrawl_error
-            else:
-                logger.warning(f"Health check returned status {health_response.status_code}")
-    except httpx.RequestError as e:
-        # Connection/DNS error - show helpful message
-        logger.error(f"Failed to connect to backend at {BACKEND_API_URL}: {str(e)}")
-        st.error(
-            f"❌ Cannot connect to backend API at {BACKEND_API_URL}. Please check service connectivity."
-        )
-        firecrawl_configured = False
-    except Exception as e:
-        # Other errors
-        logger.warning(f"Failed to check Firecrawl configuration: {str(e)}")
-        firecrawl_configured = False
-
-    # Display Firecrawl configuration status with specific error if available
-    if not firecrawl_configured:
-        error_msg = st.session_state.get("firecrawl_error", None)
-        if error_msg:
-            st.error(f"❌ Firecrawl Error: {error_msg}")
-            st.info("💡 Using mock data for now. Fix the error above to enable real search.")
-        else:
-            st.warning(
-                "⚠️ Firecrawl is not configured. Real search will be unavailable. Using mock data only."
-            )
+    
+    # Display search mode status
+    st.info("✅ Search Mode: Database (Verified)")
 
     # Search form
     col1, col2 = st.columns(2)
@@ -925,39 +879,26 @@ with tab5:
         min_salary = st.number_input("Minimum Salary", min_value=0, value=0, step=10000)
         is_remote = st.checkbox("Remote Work Available")
 
-        # Company stages
+        # Company stages - must match CompanyStage enum values exactly
         st.subheader("Company Stages")
         seed = st.checkbox("Seed", value=False)
         series_a = st.checkbox("Series A", value=False)
-        growth = st.checkbox("Growth", value=False)
-        scale_up = st.checkbox("Scale Up", value=False)
+        growth = st.checkbox("Growth (Series B or later)", value=False)
+        employees_1_10 = st.checkbox("1-10 employees", value=False)
+        employees_10_100 = st.checkbox("10-100 employees", value=False)
 
-        # Build company stages list
+        # Build company stages list with exact enum values
         company_stages = []
         if seed:
             company_stages.append("Seed")
         if series_a:
-            company_stages.append("SeriesA")
+            company_stages.append("Series A")  # Exact match to enum value
         if growth:
-            company_stages.append("Growth")
-        if scale_up:
-            company_stages.append("ScaleUp")
-
-    # Search source selection
-    use_firecrawl = st.radio(
-        "Search Source",
-        ["Mock Data", "Firecrawl (Real)"],
-        index=0,
-        help="Mock Data: Returns sample vacancies. Firecrawl: Fetches real vacancies from a16z jobs page (requires FIRECRAWL_API_KEY).",
-    )
-
-    if use_firecrawl == "Firecrawl (Real)" and not firecrawl_configured:
-        error_msg = st.session_state.get("firecrawl_error", "FIRECRAWL_API_KEY is not configured")
-        st.error(f"❌ Cannot use Firecrawl: {error_msg}")
-        st.info("💡 Please fix the error above or use Mock Data instead.")
-        use_firecrawl_bool = False
-    else:
-        use_firecrawl_bool = use_firecrawl == "Firecrawl (Real)"
+            company_stages.append("Growth (Series B or later)")  # Exact match to enum value
+        if employees_1_10:
+            company_stages.append("1-10 employees")  # Exact match to enum value
+        if employees_10_100:
+            company_stages.append("10-100 employees")  # Exact match to enum value
 
     # Search button
     if st.button("🔍 Search Vacancies", type="primary", use_container_width=True):
@@ -987,7 +928,8 @@ with tab5:
 
             with st.spinner("🔍 Searching for vacancies..."):
                 with httpx.Client(timeout=120.0) as client:
-                    params = {"use_firecrawl": "true" if use_firecrawl_bool else "false"}
+                    # Always use Pinecone database (use_firecrawl=False by default)
+                    params = {"use_firecrawl": "false"}
                     response = client.post(
                         search_endpoint,
                         json=filter_params,
