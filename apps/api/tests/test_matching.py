@@ -18,7 +18,7 @@ sys.modules["langchain_google_genai"] = MagicMock()
 sys.modules["langgraph"] = MagicMock()
 
 # Import after setting up mocks
-from apps.api.main import app
+from apps.api.main import app  # noqa: E402
 
 
 @pytest.fixture
@@ -73,14 +73,14 @@ def test_match_endpoint_success(
     mock_pc_client.get_candidate_embedding.return_value = mock_candidate_embedding
     mock_pc_client.search_vacancies.return_value = mock_vacancy_results
     mock_get_pinecone_client.return_value = mock_pc_client
-    
+
     # Mock LLM response (async function)
     mock_llm = AsyncMock()
     mock_response = MagicMock()
     mock_response.content = "This vacancy is a great fit because the candidate has strong Python skills and relevant experience."
     mock_llm.ainvoke = AsyncMock(return_value=mock_response)
     mock_get_llm.return_value = mock_llm
-    
+
     # Make request
     response = client.post(
         "/match",
@@ -89,13 +89,13 @@ def test_match_endpoint_success(
             "top_k": 10
         }
     )
-    
+
     # Assertions
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
     assert len(data) == 2
-    
+
     # Check first result
     first_result = data[0]
     assert "score" in first_result
@@ -114,7 +114,7 @@ def test_match_endpoint_candidate_not_found(mock_get_pinecone_client, client):
     mock_pc_client = MagicMock()
     mock_pc_client.get_candidate_embedding.return_value = None
     mock_get_pinecone_client.return_value = mock_pc_client
-    
+
     # Make request
     response = client.post(
         "/match",
@@ -123,7 +123,7 @@ def test_match_endpoint_candidate_not_found(mock_get_pinecone_client, client):
             "top_k": 10
         }
     )
-    
+
     # Assertions
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
@@ -137,7 +137,7 @@ def test_match_endpoint_missing_candidate_id(client):
             "top_k": 10
         }
     )
-    
+
     assert response.status_code == 422  # Validation error
 
 
@@ -145,18 +145,18 @@ def test_match_endpoint_default_top_k(client, mock_candidate_embedding, mock_vac
     """Test matching endpoint with default top_k."""
     with patch('apps.orchestrator.graph.get_pinecone_client') as mock_get_pc, \
          patch('apps.orchestrator.graph.get_llm') as mock_get_llm:
-        
+
         mock_pc_client = MagicMock()
         mock_pc_client.get_candidate_embedding.return_value = mock_candidate_embedding
         mock_pc_client.search_vacancies.return_value = mock_vacancy_results[:1]  # Return 1 result
         mock_get_pc.return_value = mock_pc_client
-        
+
         mock_llm = AsyncMock()
         mock_response = MagicMock()
         mock_response.content = "Test reasoning"
         mock_llm.ainvoke = AsyncMock(return_value=mock_response)
         mock_get_llm.return_value = mock_llm
-        
+
         # Make request without top_k (should default to 10)
         response = client.post(
             "/match",
@@ -164,7 +164,7 @@ def test_match_endpoint_default_top_k(client, mock_candidate_embedding, mock_vac
                 "candidate_id": "user_123"
             }
         )
-        
+
         assert response.status_code == 200
         # Verify search_vacancies was called (the actual top_k used depends on implementation)
         mock_pc_client.search_vacancies.assert_called_once()
@@ -175,4 +175,3 @@ def test_health_endpoint(client):
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
-

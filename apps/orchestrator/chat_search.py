@@ -7,7 +7,7 @@ then generates friendly summaries of search results.
 
 import json
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -44,10 +44,10 @@ class ChatSearchAgent:
     async def interpret_message(self, user_input: str) -> Dict[str, Any]:
         """
         Extract search parameters from natural language user input.
-        
+
         Args:
             user_input: Natural language message from the user
-            
+
         Returns:
             Dictionary with extracted parameters:
             - role: Optional[str] - Job role/title
@@ -55,11 +55,11 @@ class ChatSearchAgent:
             - industry: Optional[str] - Industry sector
             - location: Optional[str] - Job location
             - company_stage: Optional[str] - Company funding stage
-            
+
             Missing fields will be None.
         """
         logger.info("interpreting_user_message", user_input_length=len(user_input))
-        
+
         system_prompt = """You are a helpful assistant that extracts job search parameters from natural language messages.
 
 Extract the following information from the user's message:
@@ -87,23 +87,23 @@ Do not include any explanation or additional text, only the JSON object."""
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_input)
             ]
-            
+
             response = await self.llm_provider.ainvoke(messages)
             response_text = response.content.strip()
-            
+
             # Try to extract JSON from the response (in case LLM adds extra text)
             # Look for JSON object in the response
             start_idx = response_text.find("{")
             end_idx = response_text.rfind("}") + 1
-            
+
             if start_idx >= 0 and end_idx > start_idx:
                 json_str = response_text[start_idx:end_idx]
             else:
                 json_str = response_text
-            
+
             # Parse JSON response
             extracted_params = json.loads(json_str)
-            
+
             # Normalize the response to ensure all expected fields exist
             result = {
                 "role": extracted_params.get("role"),
@@ -112,14 +112,14 @@ Do not include any explanation or additional text, only the JSON object."""
                 "location": extracted_params.get("location"),
                 "company_stage": extracted_params.get("company_stage"),
             }
-            
+
             # Convert empty strings to None
             for key in result:
                 if result[key] == "":
                     result[key] = None
                 elif key == "skills" and result[key] is not None and len(result[key]) == 0:
                     result[key] = None
-            
+
             logger.info(
                 "message_interpreted",
                 role=result["role"],
@@ -128,9 +128,9 @@ Do not include any explanation or additional text, only the JSON object."""
                 location=result["location"],
                 company_stage=result["company_stage"],
             )
-            
+
             return result
-            
+
         except json.JSONDecodeError as e:
             logger.error("json_parse_error", error=str(e), response=response_text if 'response_text' in locals() else None)
             # Return empty result on parse error
@@ -150,26 +150,26 @@ Do not include any explanation or additional text, only the JSON object."""
     ) -> str:
         """
         Generate a friendly response summarizing why these specific vacancies were found.
-        
+
         Args:
             vacancies: List of Vacancy objects found in the search
             user_input: Original user message
-            
+
         Returns:
             Friendly summary string explaining the search results
         """
         logger.info("formatting_results_summary", vacancy_count=len(vacancies))
-        
+
         if not vacancies:
             return "I couldn't find any vacancies matching your criteria. Try adjusting your search parameters or check back later for new opportunities!"
-        
+
         # Build a summary of the vacancies
         vacancy_summaries = []
         for i, vacancy in enumerate(vacancies[:5], 1):  # Limit to top 5 for summary
             skills_str = ", ".join(vacancy.required_skills[:3]) if vacancy.required_skills else "various skills"
             if len(vacancy.required_skills) > 3:
                 skills_str += "..."
-            
+
             summary = (
                 f"{i}. {vacancy.title} at {vacancy.company_name} "
                 f"({vacancy.company_stage.value if hasattr(vacancy.company_stage, 'value') else vacancy.company_stage}) "
@@ -177,12 +177,12 @@ Do not include any explanation or additional text, only the JSON object."""
                 f"Key skills: {skills_str}."
             )
             vacancy_summaries.append(summary)
-        
+
         vacancies_text = "\n".join(vacancy_summaries)
-        
+
         if len(vacancies) > 5:
             vacancies_text += f"\n\n...and {len(vacancies) - 5} more opportunities."
-        
+
         system_prompt = """You are a helpful assistant that explains job search results in a friendly, conversational way.
 
 Based on the user's original query and the vacancies found, explain why these specific opportunities match their search.
@@ -204,14 +204,14 @@ Generate a friendly 2-3 sentence summary explaining why these vacancies match th
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ]
-            
+
             response = await self.llm_provider.ainvoke(messages)
             summary = response.content.strip()
-            
+
             logger.info("results_summary_generated", summary_length=len(summary))
-            
+
             return summary
-            
+
         except Exception as e:
             logger.error("summary_generation_error", error=str(e), error_type=type(e).__name__)
             # Fallback to a simple summary
@@ -219,5 +219,3 @@ Generate a friendly 2-3 sentence summary explaining why these vacancies match th
                 f"I found {len(vacancies)} vacancy(ies) matching your search. "
                 f"Here are the top opportunities that align with your criteria."
             )
-
-

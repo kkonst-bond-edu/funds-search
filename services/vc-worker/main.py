@@ -34,10 +34,10 @@ async def health():
 async def scrape_url(request: ScrapeRequest):
     """
     Scrape a URL and extract text content using Docling.
-    
+
     Args:
         request: ScrapeRequest with URL
-        
+
     Returns:
         ScrapeResponse with extracted text and metadata
     """
@@ -47,10 +47,10 @@ async def scrape_url(request: ScrapeRequest):
             response = await client.get(request.url)
             response.raise_for_status()
             content = response.content
-        
+
         # Determine format (try HTML first, then PDF)
         converter = DocumentConverter()
-        
+
         # Try to convert as HTML/web page
         try:
             result = converter.convert(request.url, target_format=InputFormat.HTML)
@@ -67,13 +67,13 @@ async def scrape_url(request: ScrapeRequest):
                     status_code=400,
                     detail=f"Unable to parse URL content: {str(e)}"
                 )
-        
+
         return ScrapeResponse(
             text=text,
             url=request.url,
             format=format_type
         )
-    
+
     except httpx.HTTPError as e:
         raise HTTPException(
             status_code=400,
@@ -89,4 +89,3 @@ async def scrape_url(request: ScrapeRequest):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8003)
-

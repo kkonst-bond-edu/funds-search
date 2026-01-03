@@ -1,2 +1,1 @@
 """VC worker module."""
-

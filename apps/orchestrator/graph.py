@@ -56,11 +56,12 @@ def get_pinecone_client() -> VectorStore:
 def get_llm_provider():
     """
     Get the active LLM provider instance.
-    
+
     Returns:
         LLMProvider instance (e.g., DeepSeekProvider)
     """
     return LLMProviderFactory.get_active_provider()
+
 
 # System prompt for candidate matching agent (provider-agnostic)
 SYSTEM_PROMPT = """You are an expert AI analyst specializing in matching job openings at VC funds with candidate profiles.
@@ -78,15 +79,15 @@ Be specific about technical skills, years of experience, industry knowledge, and
 async def retrieval_node(state: OrchestratorState) -> OrchestratorState:
     """
     Node 1: Retrieval - Query Pinecone for top 10 matches.
-    
+
     Args:
         state: Current orchestrator state
-        
+
     Returns:
         Updated state with retrieved_jobs
     """
     query = state["query"]
-    
+
     # Get query embedding from embedding service
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -99,14 +100,14 @@ async def retrieval_node(state: OrchestratorState) -> OrchestratorState:
             query_vector = embeddings[0]
     except Exception as e:
         raise RuntimeError(f"Error getting query embedding: {str(e)}")
-    
+
     # Build filter for Pinecone search
     filter_dict = {}
     if state.get("location"):
         filter_dict["location"] = state["location"]
     if state.get("remote") is not None:
         filter_dict["remote"] = state["remote"]
-    
+
     # Search Pinecone
     pc_client = get_pinecone_client()
     search_results = pc_client.search_similar(
@@ -114,7 +115,7 @@ async def retrieval_node(state: OrchestratorState) -> OrchestratorState:
         top_k=10,
         filter_dict=filter_dict if filter_dict else None
     )
-    
+
     # Convert results to Job objects and store scores
     retrieved_jobs = []
     job_scores = []
@@ -132,7 +133,7 @@ async def retrieval_node(state: OrchestratorState) -> OrchestratorState:
         )
         retrieved_jobs.append(job)
         job_scores.append(result["score"])  # Store Pinecone similarity score
-    
+
     return {
         **state,
         "query_vector": query_vector,
@@ -144,26 +145,26 @@ async def retrieval_node(state: OrchestratorState) -> OrchestratorState:
 async def analysis_node(state: OrchestratorState) -> OrchestratorState:
     """
     Node 2: Analysis - LLM Agent analyzes matches and generates reasoning.
-    
+
     Args:
         state: Current orchestrator state
-        
+
     Returns:
         Updated state with match_results
     """
     query = state["query"]
     retrieved_jobs = state["retrieved_jobs"]
     job_scores = state.get("job_scores", [])
-    
+
     match_results = []
-    
+
     # Get LLM provider (supports multi-agent architecture)
     llm_provider = get_llm_provider()
-    
+
     for idx, job in enumerate(retrieved_jobs):
         # Get similarity score from Pinecone (cosine similarity)
         similarity_score = job_scores[idx] if idx < len(job_scores) else 0.0
-        
+
         # Prepare context for LLM (prompt management separated from provider)
         job_context = f"""
 Job Title: {job.title or 'N/A'}
@@ -175,7 +176,7 @@ URL: {job.url}
 Job Description:
 {job.raw_text[:2000]}  # Limit context size
 """
-        
+
         # Create messages (provider-agnostic prompt structure)
         messages = [
             SystemMessage(content=SYSTEM_PROMPT),
@@ -191,23 +192,23 @@ Please analyze this job posting in the context of the search query and provide:
 3. Key factors that make this a good or poor match
 """)
         ]
-        
+
         # Get analysis from LLM provider (with built-in retry logic)
         try:
             response = await llm_provider.ainvoke(messages)
             reasoning = response.content if hasattr(response, 'content') else str(response)
         except Exception as e:
             reasoning = f"Error generating analysis: {str(e)}"
-        
+
         # Create match result with actual similarity score from Pinecone
         match_result = MatchResult(
             score=similarity_score,  # Cosine similarity from Pinecone
             reasoning=reasoning,
             job=job
         )
-        
+
         match_results.append(match_result)
-    
+
     return {
         **state,
         "match_results": match_results
@@ -217,25 +218,25 @@ Please analyze this job posting in the context of the search query and provide:
 def create_orchestrator_graph() -> StateGraph:
     """
     Create and compile the LangGraph orchestrator.
-    
+
     Returns:
         Compiled StateGraph
     """
     # Create graph
     workflow = StateGraph(OrchestratorState)
-    
+
     # Add nodes
     workflow.add_node("retrieval", retrieval_node)
     workflow.add_node("analysis", analysis_node)
-    
+
     # Define edges
     workflow.set_entry_point("retrieval")
     workflow.add_edge("retrieval", "analysis")
     workflow.add_edge("analysis", END)
-    
+
     # Compile graph
     app = workflow.compile()
-    
+
     return app
 
 
@@ -246,10 +247,10 @@ orchestrator = create_orchestrator_graph()
 async def run_search(search_request: SearchRequest) -> List[MatchResult]:
     """
     Run the orchestrator for a search request.
-    
+
     Args:
         search_request: SearchRequest object
-        
+
     Returns:
         List of MatchResult objects
     """
@@ -265,10 +266,10 @@ async def run_search(search_request: SearchRequest) -> List[MatchResult]:
         "role": search_request.role or "",
         "remote": search_request.remote or False
     }
-    
+
     # Run orchestrator
     final_state = await orchestrator.ainvoke(initial_state)
-    
+
     return final_state["match_results"]
 
 
@@ -311,22 +312,22 @@ Format your response as a structured explanation that a recruiter would use to p
 async def talent_strategist_node(state: MatchingState) -> MatchingState:
     """
     Placeholder node: Talent Strategist - Process interview context to build user persona.
-    
+
     This node will:
     - Process interview/conversation context
     - Extract technical skills, career goals, preferences
     - Build UserPersona object
-    
+
     Args:
         state: Current matching state
-        
+
     Returns:
         Updated state with user_persona
     """
     # TODO: Implement interview processing logic
     # For now, return state unchanged (placeholder)
     logger.info("Talent Strategist node: Processing interview context (placeholder)")
-    
+
     # Placeholder: If user_persona is not set, create a minimal one
     if state.get("user_persona") is None:
         user_persona = UserPersona(
@@ -340,52 +341,52 @@ async def talent_strategist_node(state: MatchingState) -> MatchingState:
             **state,
             "user_persona": user_persona
         }
-    
+
     return state
 
 
 async def web_hunter_node(state: MatchingState) -> MatchingState:
     """
     Placeholder node: Web Hunter - Firecrawl discovery logic for job discovery.
-    
+
     This node will:
     - Use Firecrawl to discover job postings from VC fund websites
     - Scrape and process job listings
     - Store raw_scraped_data for further processing
-    
+
     Args:
         state: Current matching state
-        
+
     Returns:
         Updated state with raw_scraped_data
     """
     # TODO: Implement Firecrawl discovery logic
     # For now, return state unchanged (placeholder)
     logger.info("Web Hunter node: Discovering jobs via Firecrawl (placeholder)")
-    
+
     # Placeholder: Initialize raw_scraped_data if not present
     if state.get("raw_scraped_data") is None:
         return {
             **state,
             "raw_scraped_data": []
         }
-    
+
     return state
 
 
 async def fetch_candidate_node(state: MatchingState) -> MatchingState:
     """
     Node 1: Fetch candidate embedding from Pinecone.
-    
+
     Implements retry logic for Azure cold starts and Pinecone eventual consistency:
     - Retries up to 5 times if candidate is not found
     - Waits 5 seconds between retries
     - Ensures Pinecone client is initialized during each retry (handles wake-up scenarios)
     - Only raises ValueError after all retries have failed
-    
+
     Args:
         state: Current matching state
-        
+
     Returns:
         Updated state with candidate_embedding
     """
@@ -393,16 +394,16 @@ async def fetch_candidate_node(state: MatchingState) -> MatchingState:
     namespace = "cvs"
     max_retries = 5
     retry_delay = 5  # seconds
-    
+
     # BGE-M3 uses 1024 dimensions
     EMBEDDING_DIM = 1024
-    
+
     # Retry loop for Azure cold starts and eventual consistency
     for attempt in range(max_retries):
         try:
             # Get Pinecone client inside the loop to ensure it's initialized during wake-up
             pc_client = get_pinecone_client()
-            
+
             # Query Pinecone directly
             logger.info(f"Fetching candidate embedding for {candidate_id} from namespace: {namespace} (attempt {attempt + 1}/{max_retries})")
             query_result = pc_client.index.query(
@@ -413,7 +414,7 @@ async def fetch_candidate_node(state: MatchingState) -> MatchingState:
                 filter={"user_id": {"$eq": candidate_id}},
                 namespace=namespace
             )
-            
+
             # Check if matches are found
             if not query_result.matches:
                 if attempt < max_retries - 1:
@@ -423,7 +424,7 @@ async def fetch_candidate_node(state: MatchingState) -> MatchingState:
                 else:
                     # All retries failed
                     raise ValueError(f"Candidate with ID {candidate_id} not found in Pinecone after {max_retries} attempts. Please ensure the CV has been processed.")
-            
+
             # Extract 'values' from the first match
             first_match = query_result.matches[0]
             if not hasattr(first_match, 'values') or first_match.values is None:
@@ -433,23 +434,23 @@ async def fetch_candidate_node(state: MatchingState) -> MatchingState:
                     continue
                 else:
                     raise ValueError(f"Candidate {candidate_id} found but embedding values are missing after {max_retries} attempts.")
-            
+
             # Get the embedding values from the first match
             candidate_embedding = first_match.values
-            
+
             # Normalize for cosine similarity
             embedding_array = np.array(candidate_embedding)
             norm = np.linalg.norm(embedding_array)
             if norm > 0:
                 embedding_array = embedding_array / norm
-            
+
             logger.info(f"Successfully extracted embedding for candidate {candidate_id} from first match (dim={len(embedding_array)})")
-            
+
             return {
                 **state,
                 "candidate_embedding": embedding_array.tolist()
             }
-            
+
         except ValueError:
             # Re-raise ValueError (candidate not found after all retries)
             raise
@@ -463,7 +464,7 @@ async def fetch_candidate_node(state: MatchingState) -> MatchingState:
                 # All retries failed
                 logger.error(f"Failed to fetch candidate embedding after {max_retries} attempts: {str(e)}")
                 raise ValueError(f"Candidate with ID {candidate_id} not found in Pinecone after {max_retries} attempts. Error: {str(e)}")
-    
+
     # Should not reach here, but just in case
     raise ValueError(f"Candidate with ID {candidate_id} not found in Pinecone after {max_retries} attempts.")
 
@@ -471,12 +472,12 @@ async def fetch_candidate_node(state: MatchingState) -> MatchingState:
 async def search_vacancies_node(state: MatchingState) -> MatchingState:
     """
     Node: Search for vacancies in Pinecone using filter {'type': 'vacancy'}.
-    
+
     If candidate_embedding is not available, fetches it first.
-    
+
     Args:
         state: Current matching state
-        
+
     Returns:
         Updated state with retrieved_vacancies and vacancy_scores
     """
@@ -484,10 +485,10 @@ async def search_vacancies_node(state: MatchingState) -> MatchingState:
     if not state.get("candidate_embedding"):
         logger.info("Candidate embedding not found, fetching candidate first...")
         state = await fetch_candidate_node(state)
-    
+
     candidate_embedding = state["candidate_embedding"]
     top_k = state.get("top_k", 10)
-    
+
     # Search for vacancies using namespace "vacancies"
     pc_client = get_pinecone_client()
     search_results = pc_client.search_vacancies(
@@ -495,7 +496,7 @@ async def search_vacancies_node(state: MatchingState) -> MatchingState:
         top_k=top_k,
         namespace="vacancies"
     )
-    
+
     # Extract vacancies and scores
     # search_results is already a list of dicts with 'id', 'metadata', 'score'
     retrieved_vacancies = []
@@ -513,7 +514,7 @@ async def search_vacancies_node(state: MatchingState) -> MatchingState:
                 "score": getattr(result, "score", 0.0)
             })
             vacancy_scores.append(getattr(result, "score", 0.0))
-    
+
     return {
         **state,
         "retrieved_vacancies": retrieved_vacancies,
@@ -524,29 +525,28 @@ async def search_vacancies_node(state: MatchingState) -> MatchingState:
 async def rerank_and_explain_node(state: MatchingState) -> MatchingState:
     """
     Node 3: Use LLM to rerank results and explain WHY the vacancy fits the candidate.
-    
+
     Args:
         state: Current matching state
-        
+
     Returns:
         Updated state with match_results
     """
     candidate_id = state["candidate_id"]
     retrieved_vacancies = state["retrieved_vacancies"]
     vacancy_scores = state.get("vacancy_scores", [])
-    
+
     # Get candidate's resume text for context (optional, can be enhanced)
     # For now, we'll use the candidate_id in the prompt
-    pc_client = get_pinecone_client()
-    
+
     # Get LLM provider (supports multi-agent architecture)
     llm_provider = get_llm_provider()
-    
+
     match_results = []
-    
+
     for idx, vacancy_result in enumerate(retrieved_vacancies):
         similarity_score = vacancy_scores[idx] if idx < len(vacancy_scores) else 0.0
-        
+
         # Ensure vacancy_result is a dict
         if not isinstance(vacancy_result, dict):
             # Convert to dict if it's not already
@@ -555,15 +555,15 @@ async def rerank_and_explain_node(state: MatchingState) -> MatchingState:
                 "metadata": getattr(vacancy_result, "metadata", {}),
                 "score": float(getattr(vacancy_result, "score", 0.0))
             }
-        
+
         # Safely extract metadata - ensure it's a dict
         vacancy_metadata = vacancy_result.get("metadata", {})
         if not isinstance(vacancy_metadata, dict):
             vacancy_metadata = {}
-        
+
         # Extract vacancy_id - ensure it's a clean string
         vacancy_id = str(vacancy_metadata.get("vacancy_id", vacancy_result.get("id", "unknown")))
-        
+
         # Extract vacancy_text - ensure it's a clean string (not a list or object)
         vacancy_text_raw = vacancy_metadata.get("text", "")
         if isinstance(vacancy_text_raw, str):
@@ -574,21 +574,21 @@ async def rerank_and_explain_node(state: MatchingState) -> MatchingState:
         else:
             # Convert to string if it's something else
             vacancy_text = str(vacancy_text_raw) if vacancy_text_raw else ""
-        
+
         # Ensure vacancy_text is not empty, try to get from raw_text or other fields
         if not vacancy_text:
             vacancy_text = str(vacancy_metadata.get("raw_text", ""))
-        
+
         # Limit text length for LLM context
         vacancy_text = vacancy_text[:2000] if len(vacancy_text) > 2000 else vacancy_text
-        
+
         # Prepare context for LLM - ensure all values are clean strings (prompt management separated)
         vacancy_context = f"""
 Vacancy ID: {vacancy_id}
 Vacancy Description:
 {vacancy_text}
 """
-        
+
         # Create messages (provider-agnostic prompt structure)
         messages = [
             SystemMessage(content=MATCHING_SYSTEM_PROMPT),
@@ -608,14 +608,14 @@ Please analyze why this vacancy is a good fit for this candidate and provide:
 Provide a comprehensive explanation that would help a recruiter present this match.
 """)
         ]
-        
+
         # Get analysis from LLM provider (with built-in retry logic)
         try:
             response = await llm_provider.ainvoke(messages)
             reasoning = response.content if hasattr(response, 'content') else str(response)
         except Exception as e:
             reasoning = f"Error generating analysis: {str(e)}"
-        
+
         # Create match result - ensure all values are clean types
         match_result = VacancyMatchResult(
             score=float(similarity_score),
@@ -624,9 +624,9 @@ Provide a comprehensive explanation that would help a recruiter present this mat
             vacancy_text=str(vacancy_text),
             candidate_id=str(candidate_id)
         )
-        
+
         match_results.append(match_result)
-    
+
     return {
         **state,
         "match_results": match_results
@@ -636,22 +636,22 @@ Provide a comprehensive explanation that would help a recruiter present this mat
 def create_matching_graph() -> StateGraph:
     """
     Create and compile the LangGraph orchestrator for candidate-vacancy matching.
-    
+
     New flow: Entry -> talent_strategist -> web_hunter -> search_vacancies -> rerank_and_explain -> END
-    
+
     Returns:
         Compiled StateGraph
     """
     # Create graph
     workflow = StateGraph(MatchingState)
-    
+
     # Add nodes
     workflow.add_node("talent_strategist", talent_strategist_node)
     workflow.add_node("web_hunter", web_hunter_node)
     workflow.add_node("fetch_candidate", fetch_candidate_node)
     workflow.add_node("search_vacancies", search_vacancies_node)
     workflow.add_node("rerank_and_explain", rerank_and_explain_node)
-    
+
     # Define edges - new roadmap flow
     # Entry -> talent_strategist -> web_hunter -> search_vacancies -> rerank_and_explain -> END
     # Note: fetch_candidate_node is called conditionally within search_vacancies_node if candidate_embedding is not available
@@ -660,10 +660,10 @@ def create_matching_graph() -> StateGraph:
     workflow.add_edge("web_hunter", "search_vacancies")
     workflow.add_edge("search_vacancies", "rerank_and_explain")
     workflow.add_edge("rerank_and_explain", END)
-    
+
     # Compile graph
     app = workflow.compile()
-    
+
     return app
 
 
@@ -674,10 +674,10 @@ matching_orchestrator = create_matching_graph()
 async def run_match(match_request: MatchRequest) -> List[VacancyMatchResult]:
     """
     Run the matching orchestrator for a candidate-vacancy match request.
-    
+
     Args:
         match_request: MatchRequest object with candidate_id
-        
+
     Returns:
         List of VacancyMatchResult objects
     """
@@ -693,9 +693,8 @@ async def run_match(match_request: MatchRequest) -> List[VacancyMatchResult]:
         "final_reports": [],
         "top_k": match_request.top_k or 10
     }
-    
+
     # Run orchestrator
     final_state = await matching_orchestrator.ainvoke(initial_state)
-    
-    return final_state["match_results"]
 
+    return final_state["match_results"]
