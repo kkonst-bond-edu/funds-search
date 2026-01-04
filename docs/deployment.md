@@ -71,3 +71,4 @@ One-off import check (without bringing everything up):
 docker compose build api
 docker compose run --rm api python -c "import langchain_openai; print('ok')"
 ```
+

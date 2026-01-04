@@ -151,3 +151,4 @@ The chat search endpoint uses:
 - **Embedding Service**: Generates query embeddings
 
 
+

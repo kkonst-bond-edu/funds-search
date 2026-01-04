@@ -127,3 +127,4 @@ These are typical defaults (verify in `docker-compose.yml`):
 - Validate:
   - `docker compose ps`
   - `docker compose logs -f <service>`
+

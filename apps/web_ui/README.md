@@ -103,3 +103,4 @@ Required environment variables:
 - `EMBEDDING_SERVICE_URL`: Embedding service URL (default: `http://embedding-service:8001`)
 
 
+

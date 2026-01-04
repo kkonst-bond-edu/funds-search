@@ -47,3 +47,4 @@ Should include:
 - If breaking changes are unavoidable:
   - version the API or the schema
   - add migration notes in `docs/api.md`
+
