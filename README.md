@@ -44,7 +44,6 @@ docker compose up -d --build
 
 ```mermaid
 graph TD
-    graph TD
     %% Colors and Styles
     classDef user fill:#f9f,stroke:#333,stroke-width:2px;
     classDef agent fill:#00c2ff,stroke:#005577,stroke-width:2px,color:#fff;
@@ -96,6 +95,7 @@ graph TD
 
     %% Feedback loop
     MM -->|Final Response| UI
+```
 
 ---
 
