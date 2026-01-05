@@ -217,6 +217,18 @@ IMPORTANT: Extract ONLY the search parameters explicitly mentioned in the CURREN
             # Parse JSON response
             extracted_params = json.loads(json_str)
 
+            # Store raw extracted values for debug_info (before any enrichment)
+            raw_extracted_role = extracted_params.get("role")
+            raw_required_keywords = extracted_params.get("required_keywords")
+            raw_identified_filters = {
+                "role": extracted_params.get("role"),
+                "skills": extracted_params.get("skills"),
+                "industry": extracted_params.get("industry"),
+                "location": extracted_params.get("location"),
+                "company_stage": extracted_params.get("company_stage"),
+                "required_keywords": raw_required_keywords,
+            }
+
             # Normalize the response to ensure all expected fields exist
             result = {
                 "role": extracted_params.get("role"),
@@ -224,6 +236,7 @@ IMPORTANT: Extract ONLY the search parameters explicitly mentioned in the CURREN
                 "industry": extracted_params.get("industry"),
                 "location": extracted_params.get("location"),
                 "company_stage": extracted_params.get("company_stage"),
+                "required_keywords": extracted_params.get("required_keywords"),
                 "search_mode": extracted_params.get("search_mode"),  # Will validate and default below
             }
             
@@ -322,6 +335,21 @@ IMPORTANT: Extract ONLY the search parameters explicitly mentioned in the CURREN
                             message="Using user skills + persona role in persona mode"
                         )
                     
+                    # PERSONA ENRICHMENT: Enrich role expansion with technical skills and experience
+                    # This creates a high-density search query for better embedding matching
+                    if result.get("role"):
+                        enriched_role = self._enrich_role_with_persona(
+                            result["role"],
+                            persona
+                        )
+                        if enriched_role != result["role"]:
+                            logger.info(
+                                "role_enriched_with_persona",
+                                original_role=result["role"],
+                                enriched_role=enriched_role
+                            )
+                            result["role"] = enriched_role
+                    
                     logger.info(
                         "search_mode_persona", 
                         role=result.get("role"), 
@@ -346,6 +374,14 @@ IMPORTANT: Extract ONLY the search parameters explicitly mentioned in the CURREN
                 search_mode=result["search_mode"],
             )
 
+            # Add debug_info to response
+            result["debug_info"] = {
+                "extracted_role": raw_extracted_role,
+                "identified_filters": raw_identified_filters,
+                "required_keywords": raw_required_keywords,
+                "search_mode": result.get("search_mode", "explicit"),  # Include search_mode for UI display
+            }
+
             return result
 
         except json.JSONDecodeError as e:
@@ -358,10 +394,61 @@ IMPORTANT: Extract ONLY the search parameters explicitly mentioned in the CURREN
                 "location": None,
                 "company_stage": None,
                 "search_mode": "explicit",  # Default fallback
+                "required_keywords": None,
+                "debug_info": {
+                    "extracted_role": None,
+                    "identified_filters": {},
+                    "required_keywords": None,
+                }
             }
         except Exception as e:
             logger.error("interpretation_error", error=str(e), error_type=type(e).__name__)
             raise
+
+    def _enrich_role_with_persona(self, role: str, persona: dict) -> str:
+        """
+        Enrich role expansion with technical skills and experience from CV Persona.
+        Creates a high-density search query for better embedding matching.
+        
+        Args:
+            role: The role query from Job Scout (may already be expanded)
+            persona: User persona dictionary with CV information
+            
+        Returns:
+            Enriched role query string with technical skills and experience
+        """
+        if not role or not persona:
+            return role
+        
+        enrichment_parts = []
+        
+        # Add top technical skills (up to 5) to the role query
+        technical_skills = persona.get("technical_skills")
+        if technical_skills:
+            if isinstance(technical_skills, list):
+                top_skills = technical_skills[:5]
+                if top_skills:
+                    # Add skills as keywords to the role query
+                    skills_str = " ".join(top_skills)
+                    enrichment_parts.append(skills_str)
+            elif isinstance(technical_skills, str):
+                enrichment_parts.append(technical_skills)
+        
+        # Add experience level if available
+        experience_years = persona.get("experience_years")
+        if experience_years:
+            if isinstance(experience_years, (int, float)):
+                if experience_years >= 5:
+                    enrichment_parts.append("Senior")
+                elif experience_years >= 3:
+                    enrichment_parts.append("Mid-level")
+        
+        # Combine role with enrichment parts
+        if enrichment_parts:
+            enriched_role = f"{role} {' '.join(enrichment_parts)}"
+            return enriched_role.strip()
+        
+        return role
 
     def _format_persona(self, persona: dict) -> str:
         """

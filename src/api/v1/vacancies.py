@@ -61,6 +61,14 @@ class ChatRequest(BaseModel):
     persona: Optional[dict] = Field(default=None, description="User persona/CV information for personalized search")
 
 
+class VacancySearchResponse(BaseModel):
+    """Response schema for vacancy search with statistics."""
+    vacancies: List[Vacancy] = Field(..., description="List of matching vacancies")
+    total_in_db: Optional[int] = Field(None, description="Total vacancies in database (if available)")
+    initial_vector_matches: int = Field(..., description="Number of results from initial vector search")
+    total_after_filters: int = Field(..., description="Number of results after applying all filters")
+
+
 def get_mock_vacancies() -> list[Vacancy]:
     """
     Generate mock vacancies for testing UI flow.
@@ -256,6 +264,178 @@ def filter_vacancies(vacancies: list[Vacancy], filter_params: VacancyFilter) -> 
     return filtered
 
 
+def apply_soft_title_filter(vacancies: list[Vacancy], role_query: Optional[str]) -> list[Vacancy]:
+    """
+    Apply soft title filter to exclude vacancies with conflicting terms.
+    
+    If user explicitly asked for a role type (e.g., "Backend"), filter out
+    vacancies with conflicting terms in the title (e.g., "Mobile", "Frontend")
+    unless those terms are also specified in the query.
+    
+    Args:
+        vacancies: List of vacancies to filter
+        role_query: The expanded role query from Job Scout (may contain multiple keywords)
+        
+    Returns:
+        Filtered list of vacancies
+    """
+    if not role_query:
+        return vacancies
+    
+    role_lower = role_query.lower()
+    
+    # Define conflicting role categories
+    role_conflicts = {
+        "backend": ["frontend", "front-end", "mobile", "ios", "android", "react native"],
+        "frontend": ["backend", "back-end", "mobile", "ios", "android", "react native"],
+        "mobile": ["backend", "back-end", "frontend", "front-end", "web"],
+        "ios": ["android", "backend", "back-end", "frontend", "front-end"],
+        "android": ["ios", "backend", "back-end", "frontend", "front-end"],
+    }
+    
+    # Detect which role category the user is searching for
+    detected_categories = []
+    for category, conflicts in role_conflicts.items():
+        if category in role_lower:
+            detected_categories.append(category)
+    
+    # If no specific category detected, don't filter
+    if not detected_categories:
+        return vacancies
+    
+    # Collect all conflicting terms for detected categories
+    all_conflicts = set()
+    for category in detected_categories:
+        all_conflicts.update(role_conflicts[category])
+    
+    # Remove conflicts that are also mentioned in the query (user wants both)
+    for conflict in list(all_conflicts):
+        if conflict in role_lower:
+            all_conflicts.remove(conflict)
+    
+    # Filter out vacancies with conflicting terms in title
+    filtered = []
+    for vacancy in vacancies:
+        title_lower = vacancy.title.lower()
+        has_conflict = any(conflict in title_lower for conflict in all_conflicts)
+        
+        if not has_conflict:
+            filtered.append(vacancy)
+        else:
+            logger.debug(
+                "soft_title_filter_excluded",
+                vacancy_title=vacancy.title,
+                conflict_terms=list(all_conflicts),
+                role_query=role_query
+            )
+    
+    return filtered
+
+
+def apply_hard_keyword_filter(vacancies: list[Vacancy], required_keywords: Optional[List[str]]) -> list[Vacancy]:
+    """
+    Apply hard keyword filter using required_keywords.
+    
+    Vacancies MUST contain at least one of the required keywords in their
+    title or required_skills to pass this filter.
+    
+    Args:
+        vacancies: List of vacancies to filter
+        required_keywords: List of critical keywords that must be present
+        
+    Returns:
+        Filtered list of vacancies
+    """
+    if not required_keywords or len(required_keywords) == 0:
+        return vacancies
+    
+    # Normalize keywords to lowercase for matching
+    keywords_lower = [kw.lower() for kw in required_keywords if kw and len(kw.strip()) > 0]
+    
+    if not keywords_lower:
+        return vacancies
+    
+    filtered = []
+    for vacancy in vacancies:
+        title_lower = vacancy.title.lower()
+        skills_lower = [s.lower() for s in vacancy.required_skills]
+        combined_text = f"{title_lower} {' '.join(skills_lower)}"
+        
+        # Check if at least one required keyword is present
+        has_keyword = any(kw in combined_text for kw in keywords_lower)
+        
+        if has_keyword:
+            filtered.append(vacancy)
+        else:
+            logger.debug(
+                "hard_keyword_filter_excluded",
+                vacancy_title=vacancy.title,
+                required_keywords=required_keywords
+            )
+    
+    return filtered
+
+
+def prioritize_by_persona_preferences(
+    vacancies: list[Vacancy], 
+    persona: Optional[dict],
+    search_mode: str
+) -> list[Vacancy]:
+    """
+    Prioritize vacancies based on persona preferences when in persona mode.
+    
+    In persona mode, prioritize results that match:
+    - preferred_startup_stage
+    - industry_preferences
+    
+    Args:
+        vacancies: List of vacancies to prioritize
+        persona: User persona dictionary
+        search_mode: Either "persona" or "explicit"
+        
+    Returns:
+        Reordered list of vacancies with persona matches first
+    """
+    if search_mode != "persona" or not persona:
+        return vacancies
+    
+    preferred_stage = persona.get("preferred_startup_stage")
+    industry_preferences = persona.get("industry_preferences", [])
+    
+    if not preferred_stage and not industry_preferences:
+        return vacancies
+    
+    # Separate vacancies into prioritized and non-prioritized
+    prioritized = []
+    others = []
+    
+    for vacancy in vacancies:
+        is_prioritized = False
+        
+        # Check company stage match
+        if preferred_stage:
+            vacancy_stage = CompanyStage.get_stage_value(vacancy.company_stage)
+            preferred_stage_normalized = CompanyStage.get_stage_value(preferred_stage)
+            if vacancy_stage == preferred_stage_normalized:
+                is_prioritized = True
+        
+        # Check industry match
+        if industry_preferences:
+            vacancy_industry_lower = vacancy.industry.lower()
+            for pref in industry_preferences:
+                if isinstance(pref, str) and pref.lower() in vacancy_industry_lower:
+                    is_prioritized = True
+                    break
+        
+        if is_prioritized:
+            prioritized.append(vacancy)
+        else:
+            others.append(vacancy)
+    
+    # Return prioritized first, then others
+    return prioritized + others
+
+
 def get_firecrawl_service() -> FirecrawlService:
     """
     Get or create Firecrawl service instance.
@@ -401,6 +581,7 @@ def build_search_query(filter_params: VacancyFilter, persona: Optional[dict] = N
 def build_pinecone_filter(filter_params: VacancyFilter) -> Optional[Dict[str, Any]]:
     """
     Build Pinecone filter dictionary from filter parameters.
+    Uses metadata filters for industry, location, and company_stage.
     
     Args:
         filter_params: VacancyFilter with search criteria
@@ -410,29 +591,139 @@ def build_pinecone_filter(filter_params: VacancyFilter) -> Optional[Dict[str, An
     """
     filter_dict = {}
     
-    # Pinecone supports exact matches and contains for strings
-    # For industry, we can use exact match if provided
+    # Metadata filtering: Use Pinecone metadata filters for industry
+    # Pinecone supports exact matches - we'll use $eq for single value
+    # Note: Pinecone metadata filters are case-sensitive, so we'll also do
+    # case-insensitive filtering in Python, but this reduces the initial result set
     if filter_params.industry:
-        # Use $in for partial matching (Pinecone doesn't support case-insensitive contains directly)
-        # We'll do case-insensitive filtering in Python instead
-        pass
+        # Use exact match - case-insensitive filtering happens in Python
+        filter_dict["industry"] = {"$eq": filter_params.industry}
     
-    # For location, we can try exact match, but will also filter in Python
+    # Metadata filtering: Use Pinecone metadata filters for location
+    # Similar to industry, use exact match for initial filtering
     if filter_params.location:
-        # Similar to industry, we'll filter in Python for better matching
-        pass
+        # Use exact match - case-insensitive filtering happens in Python
+        filter_dict["location"] = {"$eq": filter_params.location}
     
     # For remote_option, we can use exact boolean match
     if filter_params.is_remote is not None:
         filter_dict["remote_option"] = {"$eq": filter_params.is_remote}
     
-    # For company_stage, we can use $in for multiple values
+    # Metadata filtering: Use Pinecone metadata filters for company_stage
+    # Use $in for multiple values
     # Normalize the strings to ensure they match enum values (e.g., 'SeriesA' -> 'Series A')
     if filter_params.company_stages:
         normalized_stages = [CompanyStage.get_stage_value(s) for s in filter_params.company_stages]
         filter_dict["company_stage"] = {"$in": normalized_stages}
     
     return filter_dict if filter_dict else None
+
+
+def apply_polarity_filter(vacancies: list[Vacancy], role_query: Optional[str]) -> list[Vacancy]:
+    """
+    Apply strict polarity filter based on role domain keywords.
+    
+    If the user query contains domain-specific terms (e.g., "Frontend", "Backend", "Mobile"),
+    vacancies that don't match this domain in the title MUST be excluded.
+    
+    Args:
+        vacancies: List of vacancies to filter
+        role_query: The role query from Job Scout (may contain domain keywords)
+        
+    Returns:
+        Filtered list of vacancies
+    """
+    if not role_query:
+        return vacancies
+    
+    role_lower = role_query.lower()
+    
+    # Define domain keywords and their conflicting domains
+    domain_keywords = {
+        "frontend": ["frontend", "front-end", "react", "vue", "angular", "ui", "user interface"],
+        "backend": ["backend", "back-end", "api", "server", "microservices"],
+        "mobile": ["mobile", "ios", "android", "react native", "swift", "kotlin"],
+        "fullstack": ["fullstack", "full-stack", "full stack"],
+        "devops": ["devops", "sre", "infrastructure", "kubernetes", "docker"],
+        "data": ["data", "data science", "data scientist", "analytics", "ml", "machine learning"],
+    }
+    
+    # Detect which domain keyword is present in the query
+    detected_domains = []
+    for domain, keywords in domain_keywords.items():
+        if any(keyword in role_lower for keyword in keywords):
+            detected_domains.append(domain)
+    
+    # If no specific domain detected, don't filter
+    if not detected_domains:
+        return vacancies
+    
+    # Collect all domain keywords for detected domains
+    all_domain_keywords = set()
+    for domain in detected_domains:
+        all_domain_keywords.update(domain_keywords[domain])
+    
+    # Filter: Only keep vacancies that contain at least one domain keyword in the title
+    filtered = []
+    for vacancy in vacancies:
+        title_lower = vacancy.title.lower()
+        has_domain_match = any(keyword in title_lower for keyword in all_domain_keywords)
+        
+        if has_domain_match:
+            filtered.append(vacancy)
+        else:
+            logger.debug(
+                "polarity_filter_excluded",
+                vacancy_title=vacancy.title,
+                detected_domains=detected_domains,
+                role_query=role_query
+            )
+    
+    return filtered
+
+
+def apply_keyword_match_filter(vacancies: list[Vacancy], required_keywords: Optional[List[str]]) -> list[Vacancy]:
+    """
+    Apply strict keyword match filter using required_keywords.
+    
+    Vacancies MUST contain at least one of the required keywords in their
+    title, required_skills, or combined text to pass this filter.
+    
+    Args:
+        vacancies: List of vacancies to filter
+        required_keywords: List of critical keywords that must be present
+        
+    Returns:
+        Filtered list of vacancies
+    """
+    if not required_keywords or len(required_keywords) == 0:
+        return vacancies
+    
+    # Normalize keywords to lowercase for matching
+    keywords_lower = [kw.lower() for kw in required_keywords if kw and len(kw.strip()) > 0]
+    
+    if not keywords_lower:
+        return vacancies
+    
+    filtered = []
+    for vacancy in vacancies:
+        title_lower = vacancy.title.lower()
+        skills_lower = [s.lower() for s in vacancy.required_skills]
+        combined_text = f"{title_lower} {' '.join(skills_lower)}"
+        
+        # Check if at least one required keyword is present
+        has_keyword = any(kw in combined_text for kw in keywords_lower)
+        
+        if has_keyword:
+            filtered.append(vacancy)
+        else:
+            logger.debug(
+                "keyword_match_filter_excluded",
+                vacancy_title=vacancy.title,
+                required_keywords=required_keywords
+            )
+    
+    return filtered
 
 
 async def get_query_embedding(query_text: str, embedding_service_url: str) -> List[float]:
@@ -479,9 +770,49 @@ async def get_query_embedding(query_text: str, embedding_service_url: str) -> Li
         ) from e
 
 
+def parse_min_salary_from_range(salary_range: Optional[str]) -> Optional[int]:
+    """
+    Parse minimum salary from salary range string.
+    
+    Handles formats like:
+    - "$120k-$180k" -> 120000
+    - "$150,000 - $200,000" -> 150000
+    - "120k-180k" -> 120000
+    
+    Args:
+        salary_range: Salary range string or None
+        
+    Returns:
+        Minimum salary as integer (in dollars) or None if cannot parse
+    """
+    if not salary_range:
+        return None
+    
+    try:
+        # Remove currency symbols and spaces
+        cleaned = salary_range.replace("$", "").replace(",", "").strip()
+        
+        # Try to extract first number (minimum)
+        import re
+        # Match patterns like "120k", "120000", "120-180k", etc.
+        numbers = re.findall(r'(\d+)(?:k|K)?', cleaned)
+        if numbers:
+            min_salary_str = numbers[0]
+            min_salary = int(min_salary_str)
+            # If the number is less than 1000, assume it's in thousands (e.g., "120" in "120k")
+            if min_salary < 1000 and ('k' in cleaned.lower() or 'K' in cleaned):
+                min_salary *= 1000
+            return min_salary
+    except (ValueError, AttributeError):
+        pass
+    
+    return None
+
+
 def metadata_to_vacancy(metadata: Dict[str, Any]) -> Vacancy:
     """
     Convert Pinecone metadata dictionary to Vacancy object.
+    Ensures all fields including industry and min_salary are properly extracted.
     
     Args:
         metadata: Metadata dictionary from Pinecone
@@ -504,30 +835,65 @@ def metadata_to_vacancy(metadata: Dict[str, Any]) -> Vacancy:
             company_stage = CompanyStage.GROWTH
             logger.warning("unknown_company_stage", stage=company_stage_str, defaulted_to="GROWTH")
     
-    return Vacancy(
+    # Extract industry - ensure it's properly extracted from Pinecone metadata
+    # This is a critical field for filtering and must be present
+    industry = metadata.get("industry")
+    if not industry or industry == "" or not isinstance(industry, str):
+        industry = "Technology"  # Default fallback
+        logger.debug("industry_missing_in_metadata", defaulted_to="Technology")
+    
+    # Extract salary_range from Pinecone metadata
+    salary_range = metadata.get("salary_range")
+    
+    # Parse min_salary from salary_range if available
+    # This is extracted for frontend display (Minimum Salary field)
+    min_salary = None
+    if salary_range:
+        min_salary = parse_min_salary_from_range(salary_range)
+    # Also check if min_salary is directly in metadata (some sources may provide it directly)
+    if not min_salary and "min_salary" in metadata:
+        try:
+            min_salary_value = metadata.get("min_salary")
+            if min_salary_value is not None:
+                min_salary = int(min_salary_value)
+        except (ValueError, TypeError) as e:
+            logger.debug("min_salary_parse_failed", error=str(e), metadata_value=metadata.get("min_salary"))
+            min_salary = None
+    
+    vacancy = Vacancy(
         title=metadata.get("title", "Unknown"),
         company_name=metadata.get("company_name", "Unknown"),
         company_stage=company_stage,
         location=metadata.get("location", "Not specified"),
-        industry=metadata.get("industry", "Technology"),
-        salary_range=metadata.get("salary_range"),
+        industry=industry,
+        salary_range=salary_range,
         description_url=metadata.get("description_url", ""),
         required_skills=metadata.get("required_skills", []),
         remote_option=metadata.get("remote_option", False),
         source_url=metadata.get("source_url"),
     )
 
+    # Store min_salary as an additional attribute (not in schema, but for frontend)
+    if min_salary:
+        # Add min_salary to the vacancy object as a dynamic attribute
+        vacancy.min_salary = min_salary
 
-@router.post("/search", response_model=list[Vacancy])
+    return vacancy
+
+
+@router.post("/search", response_model=VacancySearchResponse)
 async def search_vacancies(
     filter_params: VacancyFilter,
+    required_keywords: Optional[List[str]] = Query(
+        None, description="Required keywords that must be present in vacancies"
+    ),
     use_firecrawl: bool = Query(
         False, description="Use Firecrawl for real search instead of Pinecone"
     ),
     use_mock: bool = Query(
         False, description="Use mock data instead of Pinecone"
     ),
-) -> list[Vacancy]:
+) -> VacancySearchResponse:
     """
     Search for vacancies based on filter criteria using Pinecone vector search.
 
@@ -575,25 +941,64 @@ async def search_vacancies(
         if use_mock:
             # Use mock data
             all_vacancies = get_mock_vacancies()
+            initial_count = len(all_vacancies)
+            
+            # Apply all filters in sequence
             filtered_vacancies = filter_vacancies(all_vacancies, filter_params)
+            
+            # Apply polarity filter (strict title domain matching)
+            if filter_params.role:
+                filtered_vacancies = apply_polarity_filter(filtered_vacancies, filter_params.role)
+            
+            # Apply keyword match filter
+            if required_keywords:
+                filtered_vacancies = apply_keyword_match_filter(filtered_vacancies, required_keywords)
 
             logger.info(
-                "vacancy_search_completed", total_results=len(filtered_vacancies), source="mock"
+                "vacancy_search_completed",
+                total_results=len(filtered_vacancies),
+                source="mock",
+                initial_count=initial_count
             )
 
-            return filtered_vacancies
+            return VacancySearchResponse(
+                vacancies=filtered_vacancies,
+                total_in_db=initial_count,
+                initial_vector_matches=initial_count,
+                total_after_filters=len(filtered_vacancies)
+            )
 
         if use_firecrawl:
             # Use Firecrawl for real search - DO NOT fall back to mock on failure
             try:
                 firecrawl_service = get_firecrawl_service()
                 vacancies = firecrawl_service.fetch_vacancies(filter_params, max_results=100)
+                initial_count = len(vacancies)
+                
+                # Apply all filters in sequence
+                filtered_vacancies = filter_vacancies(vacancies, filter_params)
+                
+                # Apply polarity filter (strict title domain matching)
+                if filter_params.role:
+                    filtered_vacancies = apply_polarity_filter(filtered_vacancies, filter_params.role)
+                
+                # Apply keyword match filter
+                if required_keywords:
+                    filtered_vacancies = apply_keyword_match_filter(filtered_vacancies, required_keywords)
 
                 logger.info(
-                    "vacancy_search_completed", total_results=len(vacancies), source="firecrawl"
+                    "vacancy_search_completed",
+                    total_results=len(filtered_vacancies),
+                    source="firecrawl",
+                    initial_count=initial_count
                 )
 
-                return vacancies
+                return VacancySearchResponse(
+                    vacancies=filtered_vacancies,
+                    total_in_db=None,  # Firecrawl doesn't provide total DB count
+                    initial_vector_matches=initial_count,
+                    total_after_filters=len(filtered_vacancies)
+                )
             except ImportError as e:
                 # Firecrawl package not installed - raise error, don't fall back to mock
                 error_msg = "Firecrawl package (firecrawl-py) is not installed. Please install it in requirements/api.txt."
@@ -658,6 +1063,9 @@ async def search_vacancies(
             
             logger.info("pinecone_query_completed", results_count=len(results))
             
+            # Track initial vector search results count
+            initial_vector_matches = len(results)
+            
             # Convert metadata to Vacancy objects
             vacancies = []
             for result in results:
@@ -668,17 +1076,57 @@ async def search_vacancies(
                     logger.warning("vacancy_conversion_failed", error=str(e), metadata=result.get("metadata", {}))
                     continue
             
-            # Apply additional filters in Python (for industry, location with case-insensitive matching)
+            # Apply filters in sequence for strict hybrid filtering
+            
+            # Step 1: Apply standard filters (skills, location, industry, etc.)
+            # Note: Industry and location are already filtered by Pinecone metadata filters,
+            # but we apply additional case-insensitive matching in Python
             filtered_vacancies = filter_vacancies(vacancies, filter_params)
+            logger.info(
+                "standard_filters_applied",
+                before=len(vacancies),
+                after=len(filtered_vacancies)
+            )
+            
+            # Step 2: Apply polarity filter (strict title domain matching)
+            if filter_params.role:
+                before_polarity = len(filtered_vacancies)
+                filtered_vacancies = apply_polarity_filter(filtered_vacancies, filter_params.role)
+                logger.info(
+                    "polarity_filter_applied",
+                    before=before_polarity,
+                    after=len(filtered_vacancies),
+                    role_query=filter_params.role
+                )
+            
+            # Step 3: Apply keyword match filter (required_keywords)
+            if required_keywords:
+                before_keywords = len(filtered_vacancies)
+                filtered_vacancies = apply_keyword_match_filter(filtered_vacancies, required_keywords)
+                logger.info(
+                    "keyword_match_filter_applied",
+                    before=before_keywords,
+                    after=len(filtered_vacancies),
+                    required_keywords=required_keywords
+                )
+            
+            # Final count after all filters
+            total_after_filters = len(filtered_vacancies)
             
             logger.info(
                 "vacancy_search_completed",
-                total_results=len(filtered_vacancies),
+                total_results=total_after_filters,
                 source="pinecone",
-                initial_results=len(vacancies)
+                initial_vector_matches=initial_vector_matches,
+                total_after_filters=total_after_filters
             )
             
-            return filtered_vacancies
+            return VacancySearchResponse(
+                vacancies=filtered_vacancies,
+                total_in_db=None,  # Pinecone doesn't provide total DB count easily
+                initial_vector_matches=initial_vector_matches,
+                total_after_filters=total_after_filters
+            )
             
         except HTTPException:
             # Re-raise HTTP exceptions
@@ -766,40 +1214,77 @@ async def chat_search(request: ChatRequest) -> Dict[str, Any]:
             ]
             filter_params.company_stages = normalized_company_stages
         
+        # Inject persona skills into search parameters for persona mode
+        # This forces the DB to look for embeddings matching the candidate's top skills
+        if search_mode == "persona" and request.persona:
+            persona_skills = request.persona.get("technical_skills")
+            if persona_skills:
+                # Extract top 5 technical skills from persona
+                if isinstance(persona_skills, list):
+                    top_5_skills = persona_skills[:5]
+                elif isinstance(persona_skills, str):
+                    # If it's a string, try to split by comma or use as single skill
+                    top_5_skills = [s.strip() for s in persona_skills.split(",")][:5]
+                else:
+                    top_5_skills = []
+                
+                if top_5_skills:
+                    # Merge with existing skills (avoid duplicates)
+                    existing_skills = set(filter_params.skills or [])
+                    persona_skills_set = set([s.lower() for s in top_5_skills])
+                    
+                    # Add persona skills that aren't already in the list
+                    merged_skills = list(existing_skills)
+                    for skill in top_5_skills:
+                        if skill.lower() not in [s.lower() for s in merged_skills]:
+                            merged_skills.append(skill)
+                    
+                    filter_params.skills = merged_skills
+                    logger.info(
+                        "persona_skills_injected",
+                        top_5_skills=top_5_skills,
+                        merged_skills=merged_skills,
+                        search_mode=search_mode
+                    )
+        
         # Get embedding service URL
         embedding_service_url = os.getenv(
             "EMBEDDING_SERVICE_URL",
             "http://embedding-service:8001"
         )
         
-        # Build search query from filter parameters, passing persona and search_mode
-        # build_search_query respects search_mode to determine merge strategy:
-        # - "explicit": Uses only filter_params (no persona filling)
-        # - "persona": Uses persona to fill missing role/skills in filter_params
-        # The query is optimized for Pinecone vector search using role and skills
-        base_query = build_search_query(filter_params, persona=request.persona, search_mode=search_mode)
-        
-        # For explicit mode with a role, expand query with related technical keywords
-        if search_mode == "explicit" and filter_params.role:
-            try:
-                search_query = await expand_query_with_keywords(filter_params.role, chat_agent)
-                logger.info(
-                    "chat_search_query_expanded", 
-                    base_query=base_query,
-                    expanded_query=search_query,
-                    search_mode=search_mode
-                )
-            except Exception as e:
-                logger.warning("query_expansion_failed_fallback", error=str(e))
-                search_query = base_query
+        # Extract required_keywords for hard filtering
+        required_keywords = extracted_params.get("required_keywords")
+        if required_keywords and isinstance(required_keywords, list):
+            required_keywords = [kw for kw in required_keywords if kw and len(str(kw).strip()) > 0]
         else:
-            search_query = base_query
+            required_keywords = None
+        
+        # Use the expanded role query directly from Job Scout (it's already optimized)
+        # The role field now contains an expanded search query, not just a job title
+        if filter_params.role:
+            # The role is already an expanded query from Job Scout, use it directly
+            search_query = filter_params.role
+            logger.info(
+                "chat_search_using_expanded_role_query",
+                role_query=search_query,
+                search_mode=search_mode
+            )
+        else:
+            # Fallback: build query if role is missing
+            search_query = build_search_query(filter_params, persona=request.persona, search_mode=search_mode)
+            logger.info(
+                "chat_search_query_built_fallback",
+                query=search_query,
+                search_mode=search_mode
+            )
         
         logger.info(
             "chat_search_query_built", 
             query=search_query, 
             search_mode=search_mode,
-            has_persona=request.persona is not None
+            has_persona=request.persona is not None,
+            required_keywords=required_keywords
         )
         
         # Get embedding for search query
@@ -813,8 +1298,8 @@ async def chat_search(request: ChatRequest) -> Dict[str, Any]:
         # Initialize Pinecone client
         vector_store = VectorStore()
         
-        # Query Pinecone
-        top_k = 50  # Get more results, then filter in Python
+        # Query Pinecone with top_k=40 for hybrid filtering
+        top_k = 40
         results = vector_store.query(
             query_vector=query_embedding,
             top_k=top_k,
@@ -841,10 +1326,153 @@ async def chat_search(request: ChatRequest) -> Dict[str, Any]:
         # Extract just vacancies for filtering
         vacancies = [pair[0] for pair in vacancy_score_pairs]
         
-        # Apply soft filters in Python (case-insensitive matching, at least one skill match)
-        # Note: Skill filtering requires at least ONE match (not all), and role uses partial match
-        # This prevents "0 results" - vector search ranking and AI Matcher determine final relevance
-        filtered_vacancies = filter_vacancies(vacancies, filter_params)
+        # ========================================================================
+        # STRICT HARD FILTERING: Apply hard filters BEFORE ranking/prioritization
+        # ========================================================================
+        # These filters remove vacancies that don't match, regardless of semantic score.
+        # Vacancies that fail these filters are removed BEFORE any ranking occurs.
+        # This ensures only relevant vacancies are ranked by semantic similarity.
+        # 
+        # Hard filters (applied in order):
+        # 1. Industry (if specified)
+        # 2. Location (if specified)
+        # 3. Company Stage (if specified)
+        # 4. Required Keywords (if specified)
+        # ========================================================================
+        
+        before_hard_metadata = len(vacancies)
+        filtered_vacancies = vacancies
+        
+        # HARD FILTER: Industry (strict match) - removes vacancies that don't match
+        if filter_params.industry:
+            industry_lower = filter_params.industry.lower()
+            filtered_vacancies = [
+                v for v in filtered_vacancies 
+                if industry_lower in v.industry.lower()
+            ]
+            logger.info(
+                "hard_filter_industry_applied",
+                before=before_hard_metadata,
+                after=len(filtered_vacancies),
+                industry=filter_params.industry
+            )
+        
+        # HARD FILTER: Location (strict match with synonyms) - removes vacancies that don't match
+        if filter_params.location:
+            location_lower = filter_params.location.lower().strip()
+            LOCATION_SYNONYMS = {
+                "us": ["united states", "usa", "america", "u.s.", "u.s.a."],
+                "uk": ["united kingdom", "london", "england", "britain", "great britain"],
+                "united states": ["us", "usa", "america", "u.s.", "u.s.a."],
+                "united kingdom": ["uk", "london", "england", "britain", "great britain"],
+                "usa": ["us", "united states", "america", "u.s.", "u.s.a."],
+            }
+            location_variants = [location_lower]
+            for key, synonyms in LOCATION_SYNONYMS.items():
+                if key in location_lower:
+                    location_variants.extend(synonyms)
+                elif any(syn in location_lower for syn in synonyms):
+                    location_variants.append(key)
+                    location_variants.extend(synonyms)
+            location_variants = list(dict.fromkeys(location_variants))
+            
+            before_location = len(filtered_vacancies)
+            filtered_vacancies = [
+                v for v in filtered_vacancies
+                if any(variant in v.location.lower() for variant in location_variants)
+                or (v.remote_option and "remote" in location_lower)
+            ]
+            logger.info(
+                "hard_filter_location_applied",
+                before=before_location,
+                after=len(filtered_vacancies),
+                location=filter_params.location
+            )
+        
+        # HARD FILTER: Company Stage (strict match) - removes vacancies that don't match
+        if filter_params.company_stages:
+            filter_vals = [CompanyStage.get_stage_value(s) for s in filter_params.company_stages]
+            before_stage = len(filtered_vacancies)
+            filtered_vacancies = [
+                v for v in filtered_vacancies 
+                if CompanyStage.get_stage_value(v.company_stage) in filter_vals
+            ]
+            logger.info(
+                "hard_filter_company_stage_applied",
+                before=before_stage,
+                after=len(filtered_vacancies),
+                stages=filter_params.company_stages
+            )
+        
+        # Step 4: Apply HARD keyword filter (required_keywords) - STRICT FILTER
+        # This is a strict requirement: vacancies MUST contain at least one required keyword
+        # Vacancies that don't match are removed, regardless of semantic score
+        # This filter is applied AFTER metadata filters but BEFORE ranking
+        if required_keywords:
+            before_keywords = len(filtered_vacancies)
+            filtered_vacancies = apply_hard_keyword_filter(filtered_vacancies, required_keywords)
+            logger.info(
+                "hard_keyword_filter_applied",
+                required_keywords=required_keywords,
+                before=before_keywords,
+                after=len(filtered_vacancies),
+                message="Hard filter: vacancies without required keywords removed before ranking"
+            )
+            # NO FALLBACK - if hard filter returns 0 results, that's the result
+        
+        # ========================================================================
+        # SOFT FILTERING: Apply soft filters AFTER hard filters
+        # ========================================================================
+        # These filters are less strict and allow some flexibility.
+        # Applied after hard filters but before ranking.
+        # ========================================================================
+        
+        # Step 5: Apply Soft Title Filter (exclude conflicting terms)
+        if filter_params.role:
+            before_soft = len(filtered_vacancies)
+            filtered_vacancies = apply_soft_title_filter(filtered_vacancies, filter_params.role)
+            logger.info(
+                "soft_title_filter_applied",
+                before=before_soft,
+                after=len(filtered_vacancies)
+            )
+        
+        # Step 6: Apply remaining soft filters (skills - at least one match)
+        # Note: Skills are soft filters (at least one match), not hard filters
+        before_soft_filters = len(filtered_vacancies)
+        filtered_vacancies = filter_vacancies(filtered_vacancies, filter_params)
+        logger.info(
+            "soft_filters_applied",
+            before=before_soft_filters,
+            after=len(filtered_vacancies)
+        )
+        
+        # ========================================================================
+        # RANKING: Update scores and prioritize AFTER all filtering
+        # ========================================================================
+        # Only vacancies that passed all hard filters are ranked.
+        # ========================================================================
+        
+        # Update vacancy_score_pairs to match filtered vacancies (preserve scores for filtered results)
+        # This ensures Pinecone scores are preserved for the filtered vacancies
+        filtered_vacancy_keys = {f"{v.title}_{v.company_name}" for v in filtered_vacancies}
+        vacancy_score_pairs = [
+            (v, s) for v, s in vacancy_score_pairs 
+            if f"{v.title}_{v.company_name}" in filtered_vacancy_keys
+        ]
+        
+        # Prioritize by persona preferences if in persona mode (AFTER filtering)
+        if search_mode == "persona":
+            filtered_vacancies = prioritize_by_persona_preferences(
+                filtered_vacancies,
+                request.persona,
+                search_mode
+            )
+            logger.info(
+                "persona_prioritization_applied",
+                results_after_prioritization=len(filtered_vacancies),
+                message="Prioritization applied AFTER hard filters"
+            )
 
         logger.info(
             "chat_vacancy_search_completed",
@@ -868,12 +1496,42 @@ async def chat_search(request: ChatRequest) -> Dict[str, Any]:
                 vacancy_dict['pinecone_score'] = vacancy_to_score[key]
             else:
                 vacancy_dict['pinecone_score'] = None
+            
+            # Ensure min_salary is included if available (from parsed salary_range)
+            # This is extracted from Pinecone metadata in metadata_to_vacancy()
+            if hasattr(vacancy, 'min_salary') and vacancy.min_salary is not None:
+                vacancy_dict['min_salary'] = vacancy.min_salary
+            elif vacancy_dict.get('salary_range'):
+                # Parse min_salary from salary_range if not already set
+                min_salary = parse_min_salary_from_range(vacancy_dict.get('salary_range'))
+                if min_salary:
+                    vacancy_dict['min_salary'] = min_salary
+            else:
+                # Explicitly set to None if not available
+                vacancy_dict['min_salary'] = None
+            
+            # Ensure industry is included (extracted from Pinecone metadata)
+            # This should already be there from metadata_to_vacancy(), but ensure it's present
+            if 'industry' not in vacancy_dict or not vacancy_dict.get('industry'):
+                vacancy_dict['industry'] = vacancy.industry if hasattr(vacancy, 'industry') else "Technology"
+            
+            # Ensure all required fields are present for frontend
+            # These are extracted from Pinecone metadata in metadata_to_vacancy()
+            if 'title' not in vacancy_dict:
+                vacancy_dict['title'] = vacancy.title if hasattr(vacancy, 'title') else "Unknown"
+            if 'company_name' not in vacancy_dict:
+                vacancy_dict['company_name'] = vacancy.company_name if hasattr(vacancy, 'company_name') else "Unknown"
+            if 'location' not in vacancy_dict:
+                vacancy_dict['location'] = vacancy.location if hasattr(vacancy, 'location') else "Not specified"
+            if 'required_skills' not in vacancy_dict:
+                vacancy_dict['required_skills'] = vacancy.required_skills if hasattr(vacancy, 'required_skills') else []
+            
             vacancies_response.append(vacancy_dict)
 
         # Use MatchmakerAgent to analyze top vacancies if persona is provided
-        # Analyze more candidates (up to 20) from the filtered results, then sort by AI score
+        # Analyze top 10 candidates from the filtered results, then sort by AI score
         # This ensures we get the best matches based on AI analysis, not just vector similarity
-        top_vacancies_for_matching = vacancies_response[:20] if len(vacancies_response) > 0 else []
+        top_vacancies_for_matching = vacancies_response[:10] if len(vacancies_response) > 0 else []
         
         if request.persona and top_vacancies_for_matching:
             logger.info("matchmaker_analysis_started", vacancy_count=len(top_vacancies_for_matching))
@@ -912,17 +1570,39 @@ Description URL: {vacancy_dict.get('description_url', 'N/A')}
                         ai_score = match_result.get('score')
                         match_reasoning = match_result.get('reasoning', '')
                         
+                        # Ensure ai_score is an integer (0-10 scale)
+                        if ai_score is not None:
+                            try:
+                                ai_score = int(ai_score)
+                            except (ValueError, TypeError):
+                                logger.warning(
+                                    "ai_score_invalid_type",
+                                    vacancy_title=vacancy_dict.get('title', 'Unknown'),
+                                    ai_score=ai_score
+                                )
+                                ai_score = None
+                        
                         # Add AI match score and reasoning to vacancy dict
+                        # CRITICAL: Always save the score to response object for UI to read
+                        # Score is on 0-10 scale, UI will convert to percentage
+                        vacancy_dict['ai_match_score'] = ai_score  # 0-10 scale, saved for frontend
+                        
                         if match_reasoning and len(match_reasoning) > 0:
                             vacancy_dict['match_reasoning'] = match_reasoning
-                            vacancy_dict['ai_match_score'] = ai_score  # 0-10 scale
                             successful_analyses += 1
                         else:
                             logger.warning(
                                 "matchmaker_analysis_empty_response",
                                 vacancy_title=vacancy_dict.get('title', 'Unknown')
                             )
-                            vacancy_dict['ai_match_score'] = None
+                            vacancy_dict['match_reasoning'] = None
+                        
+                        # Log that AI score was saved
+                        logger.debug(
+                            "ai_match_score_saved",
+                            vacancy_title=vacancy_dict.get('title', 'Unknown'),
+                            ai_score=ai_score
+                        )
                     else:
                         # Fallback for old format (shouldn't happen, but handle gracefully)
                         logger.warning("matchmaker_unexpected_format", vacancy_title=vacancy_dict.get('title', 'Unknown'))
@@ -945,35 +1625,36 @@ Description URL: {vacancy_dict.get('description_url', 'N/A')}
             
             logger.info("matchmaker_analysis_completed", successful=successful_analyses, total=len(top_vacancies_for_matching))
             
-            # Result Thresholding: Filter out weak matches (AI score < 5)
-            # Do not show roles that the AI Matcher explicitly identifies as weak matches (score 2-4)
-            before_threshold = len(vacancies_response)
-            vacancies_response = [
-                v for v in vacancies_response 
-                if v.get('ai_match_score') is None or v.get('ai_match_score') >= 5
-            ]
-            after_threshold = len(vacancies_response)
-            logger.info(
-                "vacancies_filtered_by_threshold",
-                before_count=before_threshold,
-                after_count=after_threshold,
-                filtered_out=before_threshold - after_threshold
-            )
-            
-            # Sort vacancies by AI match score (descending) to prioritize best matches
-            # Vacancies with AI scores are ranked higher than those without
+            # Re-rank: Sort vacancies by AI match score (descending) to prioritize best matches
+            # Only vacancies that were analyzed by Matchmaker will have AI scores
             def sort_key(v):
                 ai_score = v.get('ai_match_score')
                 if ai_score is not None:
-                    return (1, -ai_score)  # Has AI score, sort by score descending
+                    return ai_score  # Sort by AI score descending
                 else:
-                    return (0, 0)  # No AI score, sort to end
+                    return -1  # No AI score, sort to end
             
+            # Sort all vacancies by AI score (descending)
             vacancies_response.sort(key=sort_key, reverse=True)
             
-            # Keep only top 5 after sorting by AI score
-            vacancies_response = vacancies_response[:5]
-            logger.info("vacancies_sorted_by_ai_score", top_5_count=len(vacancies_response))
+            # Filter: Only show vacancies with AI score >= 5
+            # This ensures we only show high-quality matches that were analyzed by Matchmaker
+            before_filter = len(vacancies_response)
+            vacancies_response = [
+                v for v in vacancies_response 
+                if v.get('ai_match_score') is not None and v.get('ai_match_score') >= 5
+            ]
+            after_filter = len(vacancies_response)
+            logger.info(
+                "vacancies_filtered_by_ai_score",
+                before_count=before_filter,
+                after_count=after_filter,
+                filtered_out=before_filter - after_filter,
+                threshold=5
+            )
+            
+            # AI scores are already included in each vacancy dict and will be shown in the response
+            logger.info("vacancies_reranked_by_ai_score", final_count=len(vacancies_response))
         
         # Generate AI summary of results using the top vacancies
         # Convert dicts back to Vacancy objects for the summary function
@@ -998,12 +1679,20 @@ Description URL: {vacancy_dict.get('description_url', 'N/A')}
                 continue
         
         summary = await chat_agent.format_results_summary(top_vacancies_for_summary, request.message)
+        
+        # Note: Hard filters are now strict (no fallback)
+        # If required_keywords filter returns 0 results, that's the final result
+        # No warning message needed as this is expected behavior for strict filtering
+
+        # Extract debug_info from extracted_params
+        debug_info = extracted_params.get("debug_info", {})
 
         logger.info("chat_search_completed", summary_length=len(summary))
 
         return {
             "vacancies": vacancies_response,
-            "summary": summary
+            "summary": summary,
+            "debug_info": debug_info
         }
         
     except HTTPException:

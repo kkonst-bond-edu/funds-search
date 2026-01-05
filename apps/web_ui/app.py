@@ -552,63 +552,77 @@ def display_vacancy_card(vacancy: dict, index: int):
     pinecone_score = vacancy.get("pinecone_score")  # Pinecone similarity score (0.0 to 1.0)
     ai_match_score = vacancy.get("ai_match_score")  # AI match score (0 to 10)
 
-    # Create card HTML
-    card_html = f"""
-    <div class="match-card" style="margin-top: 1rem;">
-        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
-            <div style="flex: 1;">
-                <h4 style="margin: 0; color: #1f77b4;">💼 {title}</h4>
-                <p style="margin: 0.25rem 0; color: #666; font-size: 0.9rem;">
-                    <strong>{company_name}</strong> | {company_stage} | {industry}
-                </p>
-            </div>
-        </div>
-        <div style="margin-bottom: 0.5rem;">
-            <span style="color: #666;">📍 {location}</span>
-    """
-
-    if salary_range:
-        card_html += f'<span style="margin-left: 1rem; color: #666;">💰 {salary_range}</span>'
-
-    if remote_option:
-        card_html += '<span style="margin-left: 1rem; background-color: #10b981; color: white; padding: 0.25rem 0.75rem; border-radius: 0.5rem; font-size: 0.875rem;">🌐 Remote</span>'
-
-    card_html += "</div>"
-
-    if required_skills:
-        skills_str = ", ".join([f"`{skill}`" for skill in required_skills[:5]])
-        if len(required_skills) > 5:
-            skills_str += f" +{len(required_skills) - 5} more"
-        card_html += f'<div style="margin-top: 0.5rem;"><strong>Skills:</strong> {skills_str}</div>'
-
-    if description_url:
-        card_html += f'<div style="margin-top: 0.75rem;"><a href="{description_url}" target="_blank" style="color: #1f77b4; text-decoration: none; font-weight: 500;">→ Details</a></div>'
-
-    card_html += "</div>"
-
-    # Render the main card HTML
-    st.markdown(card_html, unsafe_allow_html=True)
-
-    # Render scores using helper function to ensure clean HTML rendering
-    render_score_badges(pinecone_score, ai_match_score)
-    
-    # Add AI Match Reason if available
-    if match_reasoning:
-        # Escape HTML in reasoning text for safety, but preserve line breaks
-        import html
-        escaped_reasoning = html.escape(match_reasoning)
-        # Convert line breaks to <br> tags for proper rendering
-        escaped_reasoning = escaped_reasoning.replace('\n', '<br>')
+    # Create card container with st.container for better layout control
+    with st.container():
+        # Card header with title and AI score
+        col1, col2 = st.columns([3, 1])
         
-        reasoning_html = (
-            f'<div style="margin-top: 0.75rem; margin-bottom: 0.75rem; padding: 0.75rem; '
-            f'background-color: #e7f3ff; border-radius: 0.5rem; border-left: 4px solid #1f77b4;">'
-            f'<strong style="color: #1f77b4;">🤖 AI Match Reason:</strong>'
-            f'<div style="margin-top: 0.5rem; color: #333; line-height: 1.6;">{escaped_reasoning}</div>'
-            f'</div>'
-        )
-        # Render with st.markdown and unsafe_allow_html=True to ensure HTML is rendered correctly
-        st.markdown(reasoning_html, unsafe_allow_html=True)
+        with col1:
+            st.markdown(f"### 💼 {title}")
+        
+        with col2:
+            # Display AI Match Score as metric (convert 0-10 to percentage)
+            if ai_match_score is not None:
+                # Convert 0-10 scale to 0-100 percentage
+                ai_score_percent = (ai_match_score / 10) * 100
+                st.metric("Match Score", f"{ai_score_percent:.0f}%")
+            else:
+                st.caption("Score: N/A")
+        
+        st.markdown("---")
+        
+        # Main details in a two-column layout
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown(f"**Industry:** {industry}")
+            st.markdown(f"**Location:** {location}")
+            st.markdown(f"**Company Stage:** {company_stage}")
+        
+        with col2:
+            # Required Skills
+            if required_skills:
+                skills_str = ", ".join(required_skills)
+                st.markdown(f"**Required Skills:** {skills_str}")
+            else:
+                st.markdown("**Required Skills:** Not specified")
+            
+            # Salary Range
+            if salary_range:
+                st.markdown(f"**Salary Range:** {salary_range}")
+            else:
+                st.markdown("**Salary Range:** Not Specified")
+            
+            # Remote option
+            if remote_option:
+                st.markdown('<span style="background-color: #10b981; color: white; padding: 0.25rem 0.75rem; border-radius: 0.5rem; font-size: 0.875rem;">🌐 Remote Available</span>', unsafe_allow_html=True)
+        
+        # Description URL link
+        if description_url:
+            st.markdown(f"[→ View Full Details]({description_url})")
+        
+        # Render scores using helper function
+        render_score_badges(pinecone_score, ai_match_score)
+        
+        # Add AI Match Reason if available
+        if match_reasoning:
+            # Escape HTML in reasoning text for safety, but preserve line breaks
+            import html
+            escaped_reasoning = html.escape(match_reasoning)
+            # Convert line breaks to <br> tags for proper rendering
+            escaped_reasoning = escaped_reasoning.replace('\n', '<br>')
+            
+            st.markdown("---")
+            st.markdown("**🤖 AI Match Reason:**")
+            reasoning_html = (
+                f'<div style="margin-top: 0.5rem; padding: 0.75rem; '
+                f'background-color: #e7f3ff; border-radius: 0.5rem; border-left: 4px solid #1f77b4;">'
+                f'<div style="color: #333; line-height: 1.6;">{escaped_reasoning}</div>'
+                f'</div>'
+            )
+            st.markdown(reasoning_html, unsafe_allow_html=True)
+        
+        st.markdown("")  # Add spacing between cards
 
 
 def display_matching_report(report: MatchingReport, index: int):
@@ -763,8 +777,45 @@ with tab_chat:
             # If this is an assistant message with vacancies, display them
             if message["role"] == "assistant" and "vacancies" in message:
                 vacancies = message["vacancies"]
-                for idx, vacancy in enumerate(vacancies):
+                debug_info = message.get("debug_info", {})
+                search_stats = message.get("search_stats", {})
+                
+                # Display search mode badge
+                search_mode = debug_info.get("search_mode") if debug_info else None
+                if search_mode == "persona":
+                    st.info("👤 **Persona Mode**: Matching based on your CV profile.")
+                elif search_mode == "explicit":
+                    st.success("🔍 **Explicit Mode**: Searching strictly for your query.")
+                
+                # Display search statistics header
+                if search_stats:
+                    total_matches = search_stats.get("total_after_filters", len(vacancies))
+                    initial_matches = search_stats.get("initial_vector_matches", len(vacancies))
+                    db_size = search_stats.get("total_in_db")
+                    
+                    stats_text = f"**Found {total_matches} match{'es' if total_matches != 1 else ''}**"
+                    if initial_matches and initial_matches != total_matches:
+                        stats_text += f" (Filtered from {initial_matches} initial candidates)"
+                    if db_size:
+                        stats_text += f". Database size: {db_size}"
+                    
+                    st.info(f"📊 {stats_text}")
+                
+                # Display debug info expander
+                if debug_info:
+                    with st.expander("🛠️ AI Agent Thought Process", expanded=False):
+                        st.json(debug_info)
+                
+                # Show top 5 vacancies but indicate if more exist
+                top_5_vacancies = vacancies[:5]
+                total_vacancies = len(vacancies)
+                
+                for idx, vacancy in enumerate(top_5_vacancies):
                     display_vacancy_card(vacancy, idx)
+                
+                # Indicate if more vacancies exist
+                if total_vacancies > 5:
+                    st.info(f"📋 Showing top 5 results. {total_vacancies - 5} more vacancy/vacancies available.")
 
     # Chat input
     if user_input := st.chat_input("Describe what role you're looking for..."):
@@ -809,6 +860,20 @@ with tab_chat:
                 # Extract results
                 vacancies = result.get("vacancies", [])
                 summary = result.get("summary", "Found matching vacancies.")
+                debug_info = result.get("debug_info", {})
+                
+                # Extract search statistics if available (from VacancySearchResponse structure)
+                # Note: The chat endpoint may not return these directly, but we can construct from available data
+                search_stats = {}
+                # Check if statistics are in the result (from search endpoint) or construct from vacancies
+                if "total_after_filters" in result:
+                    search_stats["total_after_filters"] = result.get("total_after_filters", len(vacancies))
+                    search_stats["initial_vector_matches"] = result.get("initial_vector_matches", len(vacancies))
+                    search_stats["total_in_db"] = result.get("total_in_db")
+                else:
+                    # Construct basic stats from available data
+                    search_stats["total_after_filters"] = len(vacancies)
+                    search_stats["initial_vector_matches"] = len(vacancies)  # Default to same if unknown
 
                 status.update(label="✅ Search completed!", state="complete")
 
@@ -858,7 +923,9 @@ with tab_chat:
             st.session_state.chat_messages.append({
                 "role": "assistant",
                 "content": summary if summary else "Found matching vacancies.",
-                "vacancies": vacancies
+                "vacancies": vacancies,
+                "debug_info": debug_info if 'debug_info' in locals() else {},
+                "search_stats": search_stats if 'search_stats' in locals() else {}
             })
 
         st.rerun()
