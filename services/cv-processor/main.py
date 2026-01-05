@@ -85,7 +85,17 @@ async def process_cv(user_id: str, file: UploadFile = File(...)):
         # 6. Сохраняем в Pinecone в namespace "cvs"
         get_vector_store().upsert_resume(resume, namespace="cvs")
 
-        return {"status": "success", "resume_id": resume.id, "chunks_processed": len(doc_chunks)}
+        # 7. Return response with persona information (raw_text for LLM context)
+        return {
+            "status": "success",
+            "resume_id": resume.id,
+            "chunks_processed": len(doc_chunks),
+            "persona": {
+                "cv_text": markdown_text[:2000],  # Limit to 2000 chars for persona context
+                "user_id": user_id,
+                "resume_id": resume.id
+            }
+        }
 
     finally:
         if os.path.exists(temp_path):

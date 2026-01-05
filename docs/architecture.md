@@ -161,3 +161,4 @@ Minimum metadata per vector:
 - Pinecone client wrapper: `shared/pinecone_client.py`
 - Orchestration logic: `apps/orchestrator/`
 
+

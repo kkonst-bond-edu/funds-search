@@ -73,28 +73,31 @@ class DeepSeekProvider(LLMProvider):
     Model: deepseek-chat (V3)
     """
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None, temperature: Optional[float] = None):
         """
         Initialize DeepSeek provider.
 
         Args:
             api_key: DeepSeek API key. If None, reads from DEEPSEEK_API_KEY env var.
+            model_name: Model name to use. If None, defaults to "deepseek-chat".
+            temperature: Temperature for the model. If None, defaults to 0.7.
         """
         self._api_key = api_key or os.getenv("DEEPSEEK_API_KEY", "")
         if not self._api_key:
             raise ValueError("DEEPSEEK_API_KEY environment variable is required")
 
-        self._model_name = "deepseek-chat"
+        self._model_name = model_name or "deepseek-chat"
         self._base_url = "https://api.deepseek.com"
+        self._temperature = temperature if temperature is not None else 0.7
 
-        logger.info(f"Initializing DeepSeek provider with model: {self._model_name}")
+        logger.info(f"Initializing DeepSeek provider with model: {self._model_name}, temperature: {self._temperature}")
 
         # Initialize LangChain ChatOpenAI with DeepSeek configuration
         self._llm = ChatOpenAI(
             model=self._model_name,
             api_key=self._api_key,
             base_url=self._base_url,
-            temperature=0.7,
+            temperature=self._temperature,
             timeout=60.0
         )
 
@@ -167,12 +170,14 @@ class LLMProviderFactory:
     _active_provider: Optional[LLMProvider] = None
 
     @classmethod
-    def get_provider(cls, provider_name: Optional[str] = None) -> LLMProvider:
+    def get_provider(cls, provider_name: Optional[str] = None, model_name: Optional[str] = None, temperature: Optional[float] = None) -> LLMProvider:
         """
         Get or create an LLM provider instance.
 
         Args:
             provider_name: Name of the provider to use. If None, reads from ACTIVE_AGENT env var.
+            model_name: Model name to use. If None, uses provider default.
+            temperature: Temperature for the model. If None, uses provider default.
 
         Returns:
             LLMProvider instance
@@ -184,13 +189,16 @@ class LLMProviderFactory:
         if provider_name is None:
             provider_name = os.getenv("ACTIVE_AGENT", "deepseek").lower()
 
-        # Return cached provider if available
-        if provider_name in cls._providers:
-            return cls._providers[provider_name]
+        # Create a cache key that includes model_name and temperature to support different configurations
+        cache_key = f"{provider_name}_{model_name or 'default'}_{temperature or 'default'}"
+
+        # Return cached provider if available (only if same model and temperature)
+        if cache_key in cls._providers:
+            return cls._providers[cache_key]
 
         # Create new provider instance
         if provider_name == "deepseek":
-            provider = DeepSeekProvider()
+            provider = DeepSeekProvider(model_name=model_name, temperature=temperature)
         else:
             raise ValueError(
                 f"Unsupported provider: {provider_name}. "
@@ -198,10 +206,10 @@ class LLMProviderFactory:
             )
 
         # Cache the provider
-        cls._providers[provider_name] = provider
+        cls._providers[cache_key] = provider
         cls._active_provider = provider
 
-        logger.info(f"Created and cached {provider.name} provider")
+        logger.info(f"Created and cached {provider.name} provider with model: {provider.model_name}, temperature: {temperature}")
         return provider
 
     @classmethod

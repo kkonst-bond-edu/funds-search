@@ -466,6 +466,62 @@ def display_match_result(match: VacancyMatchResult, index: int):
     )
 
 
+def render_score_badges(pinecone_score: Optional[float], ai_match_score: Optional[int]) -> None:
+    """
+    Render score badges (Pinecone and AI Match) as HTML using st.markdown.
+    
+    Args:
+        pinecone_score: Pinecone similarity score (0.0 to 1.0) or None
+        ai_match_score: AI match score (0 to 10) or None
+    """
+    if pinecone_score is None and ai_match_score is None:
+        return
+    
+    score_badges = []
+    
+    if pinecone_score is not None:
+        # Format Pinecone score as percentage
+        pinecone_percent = pinecone_score * 100
+        pinecone_badge = (
+            f'<div style="background-color: #f0f9ff; padding: 0.5rem 0.75rem; border-radius: 0.5rem; '
+            f'border: 1px solid #1f77b4;">'
+            f'<strong style="color: #1f77b4; font-size: 0.875rem;">Pinecone Search Score:</strong> '
+            f'<span style="font-weight: bold; font-size: 1.1rem; color: #1f77b4; margin-left: 0.5rem;">'
+            f'{pinecone_percent:.2f}%</span></div>'
+        )
+        score_badges.append(pinecone_badge)
+    
+    if ai_match_score is not None:
+        # Determine color based on AI match score
+        if ai_match_score >= 8:
+            score_color = "#22c55e"  # Green
+        elif ai_match_score >= 6:
+            score_color = "#eab308"  # Yellow
+        else:
+            score_color = "#ef4444"  # Red
+        
+        # Build AI match score badge with clean f-string
+        ai_badge = (
+            f'<div style="background-color: #f0f9ff; padding: 0.5rem 0.75rem; border-radius: 0.5rem; '
+            f'border: 1px solid {score_color};">'
+            f'<strong style="color: {score_color}; font-size: 0.875rem;">AI Matcher Score:</strong> '
+            f'<span style="font-weight: bold; font-size: 1.1rem; color: {score_color}; margin-left: 0.5rem;">'
+            f'{ai_match_score}/10</span></div>'
+        )
+        score_badges.append(ai_badge)
+    
+    # Build container with all score badges
+    scores_container = (
+        f'<div style="margin-top: 1rem; margin-bottom: 0.75rem; padding: 0.75rem; '
+        f'background-color: #e7f3ff; border-radius: 0.5rem; border-left: 4px solid #1f77b4; '
+        f'display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;">'
+        f'{"".join(score_badges)}</div>'
+    )
+    
+    # Render with st.markdown and unsafe_allow_html=True to ensure HTML is rendered, not displayed as text
+    st.markdown(scores_container, unsafe_allow_html=True)
+
+
 def display_vacancy_card(vacancy: dict, index: int):
     """
     Display a vacancy card in the chat interface.
@@ -492,6 +548,9 @@ def display_vacancy_card(vacancy: dict, index: int):
     description_url = vacancy.get("description_url", "")
     required_skills = vacancy.get("required_skills", [])
     remote_option = vacancy.get("remote_option", False)
+    match_reasoning = vacancy.get("match_reasoning")  # AI match reasoning from MatchmakerAgent
+    pinecone_score = vacancy.get("pinecone_score")  # Pinecone similarity score (0.0 to 1.0)
+    ai_match_score = vacancy.get("ai_match_score")  # AI match score (0 to 10)
 
     # Create card HTML
     card_html = f"""
@@ -527,7 +586,29 @@ def display_vacancy_card(vacancy: dict, index: int):
 
     card_html += "</div>"
 
+    # Render the main card HTML
     st.markdown(card_html, unsafe_allow_html=True)
+
+    # Render scores using helper function to ensure clean HTML rendering
+    render_score_badges(pinecone_score, ai_match_score)
+    
+    # Add AI Match Reason if available
+    if match_reasoning:
+        # Escape HTML in reasoning text for safety, but preserve line breaks
+        import html
+        escaped_reasoning = html.escape(match_reasoning)
+        # Convert line breaks to <br> tags for proper rendering
+        escaped_reasoning = escaped_reasoning.replace('\n', '<br>')
+        
+        reasoning_html = (
+            f'<div style="margin-top: 0.75rem; margin-bottom: 0.75rem; padding: 0.75rem; '
+            f'background-color: #e7f3ff; border-radius: 0.5rem; border-left: 4px solid #1f77b4;">'
+            f'<strong style="color: #1f77b4;">🤖 AI Match Reason:</strong>'
+            f'<div style="margin-top: 0.5rem; color: #333; line-height: 1.6;">{escaped_reasoning}</div>'
+            f'</div>'
+        )
+        # Render with st.markdown and unsafe_allow_html=True to ensure HTML is rendered correctly
+        st.markdown(reasoning_html, unsafe_allow_html=True)
 
 
 def display_matching_report(report: MatchingReport, index: int):
@@ -604,12 +685,16 @@ if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = [
         {
             "role": "assistant",
-            "content": "Привет! Я твой AI-рекрутер по фондам a16z. Опиши в свободной форме: какую роль ты ищешь, твой основной стек и есть ли предпочтения по индустрии (например, AI, Crypto или BioTech)?"
+            "content": "Hello! I'm your AI recruiter for a16z portfolio companies. Describe in your own words: what role are you looking for, your main tech stack, and any industry preferences (e.g., AI, Crypto, or BioTech)?"
         }
     ]
 
+# Initialize persona if not exists
+if "persona" not in st.session_state:
+    st.session_state.persona = None
+
 # Main UI
-st.title("🔍 AI-рекрутер по фондам a16z")
+st.title("🔍 AI Recruiter for a16z Portfolio Companies")
 st.info("✅ Search Mode: Database (Verified)")
 
 # Sidebar - Clean: Only Configuration and Service Health
@@ -666,6 +751,10 @@ with tab_chat:
     st.header("💬 AI Recruiter")
     st.markdown("Chat with the AI recruiter to find your ideal role at a16z portfolio companies.")
 
+    # Show persona notification if active
+    if st.session_state.get("persona"):
+        st.info("🎯 AI is using your CV profile for personalized search.")
+
     # Display chat history
     for message in st.session_state.chat_messages:
         with st.chat_message(message["role"]):
@@ -678,7 +767,7 @@ with tab_chat:
                     display_vacancy_card(vacancy, idx)
 
     # Chat input
-    if user_input := st.chat_input("Опиши, какую роль ты ищешь..."):
+    if user_input := st.chat_input("Describe what role you're looking for..."):
         # Add user message to chat history
         st.session_state.chat_messages.append({"role": "user", "content": user_input})
 
@@ -687,28 +776,44 @@ with tab_chat:
         vacancies = []
 
         # Show status while processing
-        with st.status("AI анализирует твой запрос...", expanded=True) as status:
+        with st.status("AI is analyzing your request...", expanded=True) as status:
             try:
                 # Call chat API
                 chat_endpoint = f"{BACKEND_API_URL}/api/v1/vacancies/chat"
                 logger.info(f"Calling chat endpoint: {chat_endpoint}")
 
+                # Prepare request payload with history and persona
+                # Convert chat_messages to history format (exclude the current message we just added)
+                history = []
+                for msg in st.session_state.chat_messages[:-1]:  # Exclude the last message (current user input)
+                    if msg.get("role") in ["user", "assistant"]:
+                        history.append({
+                            "role": msg["role"],
+                            "content": msg.get("content", "")
+                        })
+
+                request_payload = {
+                    "message": user_input,
+                    "history": history,
+                    "persona": st.session_state.get("persona")
+                }
+
                 with httpx.Client(timeout=120.0) as client:
                     response = client.post(
                         chat_endpoint,
-                        json={"message": user_input}
+                        json=request_payload
                     )
                     response.raise_for_status()
                     result = response.json()
 
                 # Extract results
                 vacancies = result.get("vacancies", [])
-                summary = result.get("summary", "Найдены подходящие вакансии.")
+                summary = result.get("summary", "Found matching vacancies.")
 
-                status.update(label="✅ Поиск завершен!", state="complete")
+                status.update(label="✅ Search completed!", state="complete")
 
             except httpx.HTTPStatusError as e:
-                status.update(label="❌ Ошибка API", state="error")
+                status.update(label="❌ API Error", state="error")
                 error_detail = e.response.text[:200] if e.response.text else "Unknown error"
                 try:
                     error_json = e.response.json()
@@ -717,11 +822,11 @@ with tab_chat:
                     pass
 
                 # Add error message to chat
-                error_message = "Извини, произошла ошибка при поиске вакансий. Попробуй еще раз или уточни свой запрос."
+                error_message = "Sorry, an error occurred while searching for vacancies. Please try again or refine your query."
                 if e.response.status_code == 422:
-                    error_message = "Не удалось понять твой запрос. Попробуй описать роль, навыки или индустрию более подробно."
+                    error_message = "Could not understand your query. Please try describing the role, skills, or industry in more detail."
                 elif e.response.status_code == 500:
-                    error_message = "Временная ошибка сервера. Пожалуйста, попробуй еще раз через несколько секунд."
+                    error_message = "Temporary server error. Please try again in a few seconds."
 
                 st.session_state.chat_messages.append({
                     "role": "assistant",
@@ -730,8 +835,8 @@ with tab_chat:
                 st.rerun()
 
             except httpx.RequestError:
-                status.update(label="❌ Ошибка соединения", state="error")
-                error_message = f"Не удалось подключиться к серверу. Проверь, что API доступен по адресу {BACKEND_API_URL}."
+                status.update(label="❌ Connection Error", state="error")
+                error_message = f"Could not connect to server. Please check that the API is available at {BACKEND_API_URL}."
                 st.session_state.chat_messages.append({
                     "role": "assistant",
                     "content": error_message
@@ -739,9 +844,9 @@ with tab_chat:
                 st.rerun()
 
             except Exception as e:
-                status.update(label="❌ Неожиданная ошибка", state="error")
+                status.update(label="❌ Unexpected Error", state="error")
                 logger.error(f"Chat search error: {str(e)}")
-                error_message = f"Произошла неожиданная ошибка: {str(e)[:100]}"
+                error_message = f"An unexpected error occurred: {str(e)[:100]}"
                 st.session_state.chat_messages.append({
                     "role": "assistant",
                     "content": error_message
@@ -752,18 +857,18 @@ with tab_chat:
         if summary or vacancies:
             st.session_state.chat_messages.append({
                 "role": "assistant",
-                "content": summary if summary else "Найдены подходящие вакансии.",
+                "content": summary if summary else "Found matching vacancies.",
                 "vacancies": vacancies
             })
 
         st.rerun()
 
     # Clear chat button
-    if st.button("🗑️ Очистить чат", use_container_width=True):
+    if st.button("🗑️ Clear Chat", use_container_width=True):
         st.session_state.chat_messages = [
             {
                 "role": "assistant",
-                "content": "Привет! Я твой AI-рекрутер по фондам a16z. Опиши в свободной форме: какую роль ты ищешь, твой основной стек и есть ли предпочтения по индустрии (например, AI, Crypto или BioTech)?"
+                "content": "Hello! I'm your AI recruiter for a16z portfolio companies. Describe in your own words: what role are you looking for, your main tech stack, and any industry preferences (e.g., AI, Crypto, or BioTech)?"
             }
         ]
         st.rerun()
@@ -952,42 +1057,38 @@ with tab_cv:
             elif not uploaded_file:
                 st.error("Please upload a PDF file")
             else:
-                # Progress bar for CV processing
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-
                 try:
-                    status_text.text("📤 Uploading CV file...")
-                    progress_bar.progress(10)
-
-                    status_text.text("🔄 Converting PDF to text...")
-                    progress_bar.progress(30)
-
-                    status_text.text("🧠 Generating embeddings...")
-                    progress_bar.progress(50)
-
-                    status_text.text("💾 Saving to database...")
-                    progress_bar.progress(70)
-
-                    result = process_cv_upload(uploaded_file, user_id)
-
-                    progress_bar.progress(100)
-                    status_text.text("✅ Processing complete!")
+                    with st.status("Processing your CV...", expanded=True) as status:
+                        status.update(label="📤 Uploading CV file to server...", state="running")
+                        # Note: The backend handles model loading, text extraction, and embedding generation
+                        # Models are pre-cached in the Docker image, so this should be fast
+                        result = process_cv_upload(uploaded_file, user_id)
+                        status.update(label="✅ CV processed successfully!", state="complete")
 
                     st.success("✅ CV processed successfully!")
                     st.json(result)
                     st.info(
                         f"**Resume ID:** {result.get('resume_id')}\n\n**Chunks Processed:** {result.get('chunks_processed')}"
                     )
-
-                    # Clear progress after a moment
-                    time.sleep(0.5)
-                    progress_bar.empty()
-                    status_text.empty()
+                    
+                    # Save persona to session state for personalized search
+                    persona = result.get("persona")
+                    if persona:
+                        st.session_state["persona"] = persona
+                        st.success("🎯 CV profile saved! AI will use it for personalized search.")
+                    else:
+                        # Fallback: create basic persona from available data
+                        st.session_state["persona"] = {
+                            "cv_text": "",  # Will be populated if available
+                            "user_id": user_id,
+                            "resume_id": result.get('resume_id')
+                        }
+                        st.warning("⚠️ Persona not found in response, using basic structure.")
+                    
+                    # Debug: Show persona in state
+                    st.write("Debug: Persona in state:", st.session_state.get("persona"))
 
                 except Exception as e:
-                    progress_bar.empty()
-                    status_text.empty()
                     st.error(f"❌ Error: {str(e)}")
                     logger.error(f"CV processing error: {str(e)}")
 

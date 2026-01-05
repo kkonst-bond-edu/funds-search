@@ -1,0 +1,16 @@
+job_scout:
+  provider: "deepseek"
+  model: "deepseek-chat"
+  prompt_file: "job_scout.txt"
+  temperature: 0.9
+matchmaker:
+  provider: "deepseek"
+  model: "deepseek-chat"
+  prompt_file: "matchmaker.txt"
+  temperature: 0.3
+talent_strategist:
+  provider: "deepseek"
+  model: "deepseek-chat"
+  prompt_file: "talent_strategist.txt"
+  temperature: 0.1
+

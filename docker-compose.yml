@@ -20,9 +20,7 @@ services:
       - embedding-service
       - cv-processor
     volumes:
-      - ./apps:/app/apps
-      - ./shared:/app/shared
-      - ./src:/app/src
+      - .:/app
     networks:
       - job-hunter-net
 
@@ -53,6 +51,8 @@ services:
       - PINECONE_API_KEY=${PINECONE_API_KEY}
       - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME}
       - EMBEDDING_SERVICE_URL=http://embedding-service:8001
+    volumes:
+      - .:/app
     networks:
       - job-hunter-net
 
@@ -84,8 +84,7 @@ services:
       - api
       - cv-processor
     volumes:
-      - ./apps:/app/apps
-      - ./shared:/app/shared
+      - .:/app
     networks:
       - job-hunter-net
 

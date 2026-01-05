@@ -10,4 +10,5 @@ python-dotenv>=1.0.0
 numpy>=1.26.0
 pinecone
 structlog>=24.1.0
+pyyaml>=6.0.0
 
