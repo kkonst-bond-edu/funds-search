@@ -32,10 +32,8 @@ from shared.schemas import (
 from typing import List
 
 # Import vacancies router
-project_root = Path(__file__).parent.parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
-from src.api.v1.vacancies import router as vacancies_router  # noqa: E402
+# Note: PYTHONPATH should be set to project root, no manual sys.path manipulation needed
+from src.api.v1.vacancies import router as vacancies_router
 
 logger = logging.getLogger(__name__)
 

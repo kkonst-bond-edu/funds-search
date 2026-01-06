@@ -13,9 +13,6 @@ jobs:
       matrix:
         python-version: ["3.10"]
     
-    env:
-      PYTHONPATH: ${{ github.workspace }}
-    
     steps:
     - uses: actions/checkout@v4
     
@@ -41,11 +38,13 @@ jobs:
         python -m pip install --upgrade pip
         
         # Force uninstall any broken/cached langgraph versions
-        pip uninstall -y langgraph || true
+        pip uninstall -y langgraph langgraph-checkpoint || true
         
-        # Install core langgraph dependencies first
+        # Force reinstall langgraph with sub-dependencies to ensure correct package structure
+        pip install --force-reinstall --no-cache-dir langgraph==0.2.2 langgraph-checkpoint
+        
+        # Install core dependencies
         pip install --no-cache-dir \
-          langgraph==0.2.2 \
           langchain-openai \
           langchain-core \
           langchain-community \
@@ -102,9 +101,14 @@ jobs:
         python3 -c "import langgraph; print(f'Langgraph is coming from: {langgraph.__file__ if hasattr(langgraph, \"__file__\") else \"NAMESPACE/NONE\"}')" || echo "Langgraph not found via import"
         
         echo ""
-        echo "--- 3. Running tests with site-packages priority ---"
-        # We force site-packages to be at the very beginning of sys.path
-        export PYTHONPATH=".:${{ github.workspace }}"
+        echo "--- Deep Import Diagnostic ---"
+        python3 -c "import langgraph; import importlib.util; spec = importlib.util.find_spec('langgraph'); print(f'Origin: {spec.origin}'); print(f'Submodule search paths: {spec.submodule_search_locations}')" || echo "Failed to get langgraph spec"
+        pip show -f langgraph | head -n 20 || echo "Failed to show langgraph files"
+        
+        echo ""
+        echo "--- 3. Running tests with clean PYTHONPATH ---"
+        # Use clean workspace path only (no dot to avoid shadowing)
+        export PYTHONPATH="${{ github.workspace }}"
         python3 -m pytest tests/ -v --import-mode=importlib
     
     - name: Run API tests

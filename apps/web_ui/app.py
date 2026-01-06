@@ -15,10 +15,8 @@ from typing import List, Optional, Tuple
 import httpx
 import streamlit as st
 
-# Add parent directories to path for shared imports
-sys.path.append(str(Path(__file__).parent.parent.parent))
-
-from shared.schemas import MatchingReport, VacancyMatchResult  # noqa: E402
+# Note: PYTHONPATH should be set to project root, no manual sys.path manipulation needed
+from shared.schemas import MatchingReport, VacancyMatchResult
 
 # Configure logging
 logging.basicConfig(
