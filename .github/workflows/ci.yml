@@ -29,6 +29,11 @@ jobs:
         run: |
           echo "--- 1. Clean Install ---"
           pip install pytest pytest-mock pytest-asyncio structlog
+          
+          # Install base requirements (FastAPI, etc.)
+          if [ -f "requirements.txt" ]; then pip install -r requirements.txt; fi
+          
+          # Force specific versions of LangGraph stack
           pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0" langchain-openai langchain-community langchain
           
           echo "--- 2. Aggressive Search and Destroy ---"
