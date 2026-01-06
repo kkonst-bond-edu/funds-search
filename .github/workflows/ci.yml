@@ -37,9 +37,14 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install --no-cache-dir -r requirements.txt
+        # Install API requirements (includes langchain-openai and other orchestrator deps)
+        if [ -f "requirements/api.txt" ]; then pip install --no-cache-dir -r requirements/api.txt; fi
+        # Ensure langchain-openai is installed (required for orchestrator)
+        pip install --no-cache-dir langchain-openai || echo "Note: langchain-openai may already be installed via requirements/api.txt"
     
     - name: Import smoke check - API
       run: |
+        export PYTHONPATH=$PWD:$PYTHONPATH
         python -c "import apps.api.main"
     
     - name: Import smoke check - CV Processor
