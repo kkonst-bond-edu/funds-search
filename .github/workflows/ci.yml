@@ -33,12 +33,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Unified Stack Installation
+      - name: Install Dependencies and Unified Stack
         run: |
-          echo "--- 1. Cleaning old packages ---"
-          pip uninstall -y langgraph langgraph-checkpoint langgraph-sdk langgraph-prebuilt langchain langchain-core langchain-community langchain-openai || true
+          echo "--- 1. Installing base and service requirements ---"
+          pip install -r requirements.txt
+          # Add other service requirements if necessary
+          find services/ -name "requirements.txt" -exec pip install -r {} + || true
           
-          echo "--- 2. Installing synchronized stack ---"
+          echo "--- 2. Purging and Force-syncing LangChain/LangGraph stack ---"
+          pip uninstall -y langgraph langgraph-checkpoint langgraph-sdk langgraph-prebuilt langchain langchain-core langchain-community langchain-openai || true
           pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0" langchain-openai langchain-community langchain
           
           echo "--- 3. Verify Version Sync ---"
