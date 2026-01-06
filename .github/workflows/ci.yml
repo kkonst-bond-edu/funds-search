@@ -16,39 +16,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Free Disk Space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /usr/local/share/powershell /usr/share/swift /usr/local/lib/node_modules
-
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      
-      - name: Unified Stack Installation and Aggressive Purge
+
+      - name: Comprehensive Installation
         run: |
-          echo "--- 1. Clean Install ---"
-          pip install pytest pytest-mock pytest-asyncio structlog
+          python -m pip install --upgrade pip
+          # 1. Install project dependencies
+          pip install -r requirements.txt || true
+          pip install pytest pytest-mock pytest-asyncio structlog fastapi uvicorn
           
-          # Install base requirements (FastAPI, etc.)
-          if [ -f "requirements.txt" ]; then pip install -r requirements.txt; fi
-          
-          # Force specific versions of LangGraph stack
+          # 2. Sync LangChain stack
+          pip uninstall -y langgraph langgraph-checkpoint langgraph-sdk langgraph-prebuilt langchain langchain-core langchain-community langchain-openai || true
           pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0" langchain-openai langchain-community langchain
           
-          echo "--- 2. Aggressive Search and Destroy ---"
-          # This finds any FILE named langgraph.py (case-insensitive) anywhere
-          find . -iname "langgraph.py" -not -path "*site-packages*" -exec echo "🚨 Found shadow file: {}" \; -exec rm -f {} +
-          # This finds any FOLDER named langgraph (case-insensitive) that is not a real package
-          find . -type d -iname "langgraph" -not -path "*site-packages*" -not -path "*/.*" -exec echo "🚨 Found shadow folder: {}" \; -exec rm -rf {} +
+          # 3. DESTROY THE IMPOSTER (The Final Fix)
+          # We search for ANY file/folder named langgraph (case-insensitive) NOT in site-packages and DELETE it.
+          find . -iname "langgraph*" -not -path "*site-packages*" -not -path "*/.*" -exec echo "🚨 Removing imposter: {}" \; -exec rm -rf {} +
 
-      - name: Import smoke checks
-        run: |
-          export PYTHONPATH="${{ github.workspace }}"
-          python3 -c "import apps.api.main; print('✓ API import successful')"
-          python3 -c "import apps.orchestrator.workflow; print('✓ Workflow import successful')"
-
-      - name: Run Pytest with Path Debug
+      - name: Verify and Run Tests
         env:
           OPENAI_API_KEY: "mock-key"
           DEEPSEEK_API_KEY: "mock-key"
@@ -57,13 +45,12 @@ jobs:
           PINECONE_INDEX: "mock-index"
           BACKEND_API_URL: "http://localhost:8000"
         run: |
-          echo "--- PYTHONPATH Debug ---"
-          python3 -c "import langgraph; print(f'Python sees langgraph here: {langgraph.__file__}')"
+          # Diagnostic: where is langgraph coming from?
+          python3 -c "import langgraph; print(f'IMPORT CHECK: langgraph is at {langgraph.__file__}')"
           
-          # Force pytest to ignore local shadowing by setting PYTHONPATH to site-packages only
+          # Run pytest with site-packages priority
           SITE_PKGS=$(python3 -c 'import site; print(site.getsitepackages()[0])')
           export PYTHONPATH="$SITE_PKGS:${{ github.workspace }}"
-          
           python3 -m pytest tests/ -v --import-mode=importlib
 
   docker-build-smoke:
