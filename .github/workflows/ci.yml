@@ -16,6 +16,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
+    - name: Free Disk Space
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+    
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
@@ -32,7 +36,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install --no-cache-dir -r requirements.txt
     
     - name: Import smoke check - API
       run: |
@@ -105,6 +109,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
+    - name: Free Disk Space
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+    
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
     
@@ -127,22 +135,20 @@ jobs:
     - name: Check health endpoint for ${{ matrix.service.name }}
       run: |
         if [ "${{ matrix.service.name }}" = "web-ui" ]; then
-          # Streamlit doesn't have /health, check if container is running and process is alive
-          if ! docker ps | grep -q "${{ matrix.service.name }}-test"; then
-            echo "✗ ${{ matrix.service.name }} container is not running"
-            docker logs ${{ matrix.service.name }}-test
-            exit 1
-          fi
-          # Check if Streamlit process is running inside container
-          if docker exec ${{ matrix.service.name }}-test ps aux | grep -q streamlit || docker exec ${{ matrix.service.name }}-test pgrep -f streamlit > /dev/null; then
-            echo "✓ ${{ matrix.service.name }} container is running and Streamlit process is active"
-            # Try to curl the root endpoint (may take time for Streamlit to fully start)
-            curl -f --max-time 5 http://localhost:${{ matrix.service.port }} > /dev/null 2>&1 && echo "✓ ${{ matrix.service.name }} is responding on port ${{ matrix.service.port }}" || echo "⚠ ${{ matrix.service.name }} container is running but may still be initializing"
-          else
-            echo "✗ ${{ matrix.service.name }} container is running but Streamlit process not found"
-            docker logs ${{ matrix.service.name }}-test
-            exit 1
-          fi
+          # Streamlit doesn't have /health, use curl to check if UI is available
+          attempt=1
+          while [ $attempt -le 5 ]; do
+            if curl -s -f http://localhost:${{ matrix.service.port }} > /dev/null 2>&1; then
+              echo "✓ Web UI is up and responding on port ${{ matrix.service.port }}"
+              exit 0
+            fi
+            echo "Waiting for Web UI (attempt $attempt/5)..."
+            sleep 5
+            attempt=$((attempt + 1))
+          done
+          echo "✗ Web UI did not become available after 5 attempts"
+          docker logs ${{ matrix.service.name }}-test
+          exit 1
         else
           # For other services, check /health endpoint
           max_attempts=3
@@ -170,7 +176,7 @@ jobs:
       if: always()
       run: |
         docker stop ${{ matrix.service.name }}-test || true
-        docker rm ${{ matrix.service.name }}-test || true
+        docker rm -f ${{ matrix.service.name }}-test || true
 
   docs-check:
     runs-on: ubuntu-latest
