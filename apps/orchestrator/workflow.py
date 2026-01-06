@@ -648,13 +648,13 @@ def create_matching_graph() -> StateGraph:
     # Add nodes
     workflow.add_node("talent_strategist", talent_strategist_node)
     workflow.add_node("web_hunter", web_hunter_node)
-    workflow.add_node("fetch_candidate", fetch_candidate_node)
     workflow.add_node("search_vacancies", search_vacancies_node)
     workflow.add_node("rerank_and_explain", rerank_and_explain_node)
 
     # Define edges - new roadmap flow
     # Entry -> talent_strategist -> web_hunter -> search_vacancies -> rerank_and_explain -> END
-    # Note: fetch_candidate_node is called conditionally within search_vacancies_node if candidate_embedding is not available
+    # Note: fetch_candidate_node is called directly as a function within search_vacancies_node
+    # if candidate_embedding is not available, so it doesn't need to be a separate graph node
     workflow.set_entry_point("talent_strategist")
     workflow.add_edge("talent_strategist", "web_hunter")
     workflow.add_edge("web_hunter", "search_vacancies")
