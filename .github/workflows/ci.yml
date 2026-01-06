@@ -58,7 +58,7 @@ jobs:
           python3 -c "import apps.api.main; print('✓ API import successful')"
           python3 -c "import apps.orchestrator.workflow; print('✓ Workflow import successful')"
 
-      - name: Run Pytest
+      - name: Run Pytest (Isolation Mode)
         env:
           OPENAI_API_KEY: "mock-key"
           DEEPSEEK_API_KEY: "mock-key"
@@ -67,8 +67,16 @@ jobs:
           PINECONE_INDEX: "mock-index"
           BACKEND_API_URL: "http://localhost:8000"
         run: |
-          # NO PYTHONPATH EXPORT HERE - let pytest handle it
-          python3 -m pytest tests/ -v --import-mode=importlib || (python3 -c "import sys; print('sys.path:'); [print(f'  {p}') for p in sys.path]" && exit 1)
+          echo "--- Forensic Path Check ---"
+          python3 -c "import langgraph; print(f'Langgraph found at: {langgraph.__file__ if hasattr(langgraph, \"__file__\") else \"NAMESPACE/NONE\"}')"
+          
+          echo "--- Running Tests with Priority PYTHONPATH ---"
+          # Find where site-packages is
+          SITE_PKGS=$(python3 -c 'import site; print(site.getsitepackages()[0])')
+          # Put site-packages FIRST, then workspace
+          export PYTHONPATH="$SITE_PKGS:${{ github.workspace }}"
+          
+          python3 -m pytest tests/ -v --import-mode=importlib
 
   docker-build-smoke:
     runs-on: ubuntu-latest
