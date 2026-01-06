@@ -35,8 +35,8 @@ jobs:
 
       - name: Install Dependencies and Unified Stack
         run: |
-          echo "--- 1. Installing all requirements ---"
-          pip install -r requirements.txt || echo "Root requirements.txt not found"
+          echo "--- 1. Installing requirements ---"
+          pip install -r requirements.txt || true
           pip install pytest pytest-mock pytest-asyncio structlog
           find services/ apps/ -name "requirements.txt" -exec pip install -r {} + || true
           
@@ -44,11 +44,14 @@ jobs:
           pip uninstall -y langgraph langgraph-checkpoint langgraph-sdk langgraph-prebuilt langchain langchain-core langchain-community langchain-openai || true
           pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0" langchain-openai langchain-community langchain
           
-          echo "--- 3. REMOVE LOCAL SHADOWING (THE FINAL FIX) ---"
-          # This deletes any accidental local 'langgraph' folders/files that confuse pytest
-          find . -maxdepth 4 -name "langgraph" -not -path "*site-packages*" -exec echo "Deleting shadow: {}" \; -exec rm -rf {} +
+          echo "--- 3. REMOVE LOCAL SHADOWING (DEFINITIVE FIX) ---"
+          # We search for langgraph* to catch both folders and .py files
+          find . -maxdepth 5 -name "langgraph*" -not -path "*site-packages*" -not -path "*/.*" -exec echo "Removing shadow found: {}" \; -exec rm -rf {} +
           
-          echo "--- 4. Verify Version Sync ---"
+          echo "--- 4. Verify no shadow remains ---"
+          find . -name "langgraph.py"
+          
+          echo "--- 5. Verify Version Sync ---"
           python3 -c "from importlib.metadata import version; print(f'✓ Langgraph: {version(\"langgraph\")}'); print(f'✓ Langchain-core: {version(\"langchain-core\")}')"
 
       - name: Import smoke checks
@@ -66,7 +69,7 @@ jobs:
           PINECONE_INDEX: "mock-index"
           BACKEND_API_URL: "http://localhost:8000"
         run: |
-          export PYTHONPATH="${{ github.workspace }}"
+          export PYTHONPATH="."
           python3 -m pytest tests/ -v --import-mode=importlib
 
   docker-build-smoke:
