@@ -37,13 +37,10 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         
-        # Force uninstall any broken/cached langgraph versions
-        pip uninstall -y langgraph langgraph-checkpoint || true
+        # Total wipeout of ALL langgraph-related packages to avoid namespace conflicts
+        pip uninstall -y langgraph langgraph-checkpoint langgraph-sdk langgraph-prebuilt || true
         
-        # Force reinstall langgraph with sub-dependencies to ensure correct package structure
-        pip install --force-reinstall --no-cache-dir langgraph==0.2.2 langgraph-checkpoint
-        
-        # Install core dependencies
+        # Install core dependencies FIRST (langgraph installation moved to the end)
         pip install --no-cache-dir \
           langchain-openai \
           langchain-core \
@@ -55,6 +52,9 @@ jobs:
         [ -f apps/web_ui/requirements.txt ] && pip install --no-cache-dir -r apps/web_ui/requirements.txt || true
         [ -f services/cv-processor/requirements.txt ] && pip install --no-cache-dir -r services/cv-processor/requirements.txt || true
         [ -f services/embedding-service/requirements.txt ] && pip install --no-cache-dir -r services/embedding-service/requirements.txt || true
+        
+        # Install langgraph LAST to prevent other packages from pulling in wrong version
+        pip install --no-cache-dir langgraph==0.2.60 langgraph-checkpoint==1.0.12
         
         # Verify langgraph is installed correctly
         python -c "import langgraph; print(f'✓ Langgraph installed: {langgraph.__file__}')"
@@ -104,6 +104,10 @@ jobs:
         echo "--- Deep Import Diagnostic ---"
         python3 -c "import langgraph; import importlib.util; spec = importlib.util.find_spec('langgraph'); print(f'Origin: {spec.origin}'); print(f'Submodule search paths: {spec.submodule_search_locations}')" || echo "Failed to get langgraph spec"
         pip show -f langgraph | head -n 20 || echo "Failed to show langgraph files"
+        echo ""
+        echo "--- Verify __init__.py exists ---"
+        # Check if __init__.py actually exists in site-packages
+        python3 -c "import site; import os; site_packages = site.getsitepackages(); langgraph_path = os.path.join(site_packages[0] if site_packages else '', 'langgraph'); init_file = os.path.join(langgraph_path, '__init__.py'); print(f'Checking: {init_file}'); print(f'Exists: {os.path.exists(init_file)}'); print(f'Is file: {os.path.isfile(init_file) if os.path.exists(init_file) else False}')" || echo "Failed to check __init__.py"
         
         echo ""
         echo "--- 3. Running tests with clean PYTHONPATH ---"
