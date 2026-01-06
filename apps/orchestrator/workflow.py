@@ -2,14 +2,24 @@
 LangGraph orchestrator for funds-search matching.
 Implements a state machine with Retrieval and Analysis nodes.
 """
+import sys
+import os
 import logging
 import time
 import numpy as np
 from typing import TypedDict, List, Dict, Any, Optional
+
+# Ensure site-packages come before the current directory to avoid shadowing
+# This prevents local files from shadowing installed packages like langgraph
+site_pkgs = [p for p in sys.path if 'site-packages' in p]
+for p in site_pkgs:
+    if p in sys.path:
+        sys.path.remove(p)
+        sys.path.insert(0, p)
+
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import SystemMessage, HumanMessage
 import httpx
-import os
 from shared.schemas import Job, MatchResult, SearchRequest, VacancyMatchResult, MatchRequest, UserPersona, MatchingReport
 from shared.pinecone_client import VectorStore
 from apps.orchestrator.llm import LLMProviderFactory
