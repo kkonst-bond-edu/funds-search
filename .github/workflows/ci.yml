@@ -44,14 +44,42 @@ jobs:
           pip uninstall -y langgraph langgraph-checkpoint langgraph-sdk langgraph-prebuilt langchain langchain-core langchain-community langchain-openai || true
           pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0" langchain-openai langchain-community langchain
           
-          echo "--- 3. REMOVE LOCAL SHADOWING (DEFINITIVE FIX) ---"
-          # We search for langgraph* to catch both folders and .py files
-          find . -maxdepth 5 -name "langgraph*" -not -path "*site-packages*" -not -path "*/.*" -exec echo "Removing shadow found: {}" \; -exec rm -rf {} +
+          echo "--- 3. Seek and Destroy Shadowing Files (The Final Boss) ---"
+          python3 -c "
+          import importlib.util
+          import os
+          import sys
+          from pathlib import Path
+
+          def find_and_delete_shadows():
+              while True:
+                  # Force Python to find where 'langgraph' is coming from
+                  spec = importlib.util.find_spec('langgraph')
+                  if not spec or not spec.origin:
+                      break
+                  
+                  origin = spec.origin
+                  # If it's NOT in site-packages, it's a local imposter
+                  if 'site-packages' not in origin and origin != 'built-in':
+                      print(f'🚨 Found imposter langgraph at: {origin}')
+                      path = Path(origin)
+                      if path.is_file():
+                          os.remove(path)
+                          print(f'✅ Deleted file: {path}')
+                      elif path.name == '__init__.py':
+                          import shutil
+                          shutil.rmtree(path.parent)
+                          print(f'✅ Deleted directory: {path.parent}')
+                      
+                      # Invalidate cache to look for the next one
+                      importlib.invalidate_caches()
+                  else:
+                      print(f'✅ Langgraph is now safely coming from: {origin}')
+                      break
+          find_and_delete_shadows()
+          "
           
-          echo "--- 4. Verify no shadow remains ---"
-          find . -name "langgraph.py"
-          
-          echo "--- 5. Verify Version Sync ---"
+          echo "--- 4. Verify Version ---"
           python3 -c "from importlib.metadata import version; print(f'✓ Langgraph: {version(\"langgraph\")}'); print(f'✓ Langchain-core: {version(\"langchain-core\")}')"
 
       - name: Import smoke checks
