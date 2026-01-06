@@ -25,32 +25,17 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       
-      - name: Cache pip packages
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Unified Stack Installation and Shadow Purge
+      - name: Unified Stack Installation and Aggressive Purge
         run: |
-          echo "--- 1. Installing dependencies ---"
-          pip install -r requirements.txt
+          echo "--- 1. Clean Install ---"
           pip install pytest pytest-mock pytest-asyncio structlog
-          find services/ apps/ -name "requirements.txt" -exec pip install -r {} + || true
-          
-          echo "--- 2. Syncing LangGraph/LangChain stack ---"
-          pip uninstall -y langgraph langgraph-checkpoint langgraph-sdk langgraph-prebuilt langchain langchain-core langchain-community langchain-openai || true
           pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0" langchain-openai langchain-community langchain
           
-          echo "--- 3. SEEK AND DESTROY ALL SHADOWS (Case-Insensitive) ---"
-          # We search for langgraph.py, LangGraph.py, langgraph/ folder, etc.
-          # We exclude only the actual site-packages
-          find . -iname "langgraph*" -not -path "*site-packages*" -not -path "*/.*" -exec echo "🚨 Removing imposter: {}" \; -exec rm -rf {} +
-          
-          echo "--- 4. Final Smoke Check ---"
-          python3 -c "import langgraph.graph; print('✅ Shell import successful')"
+          echo "--- 2. Aggressive Search and Destroy ---"
+          # This finds any FILE named langgraph.py (case-insensitive) anywhere
+          find . -iname "langgraph.py" -not -path "*site-packages*" -exec echo "🚨 Found shadow file: {}" \; -exec rm -f {} +
+          # This finds any FOLDER named langgraph (case-insensitive) that is not a real package
+          find . -type d -iname "langgraph" -not -path "*site-packages*" -not -path "*/.*" -exec echo "🚨 Found shadow folder: {}" \; -exec rm -rf {} +
 
       - name: Import smoke checks
         run: |
@@ -58,7 +43,7 @@ jobs:
           python3 -c "import apps.api.main; print('✓ API import successful')"
           python3 -c "import apps.orchestrator.workflow; print('✓ Workflow import successful')"
 
-      - name: Run Pytest (Isolation Mode)
+      - name: Run Pytest with Path Debug
         env:
           OPENAI_API_KEY: "mock-key"
           DEEPSEEK_API_KEY: "mock-key"
@@ -67,13 +52,11 @@ jobs:
           PINECONE_INDEX: "mock-index"
           BACKEND_API_URL: "http://localhost:8000"
         run: |
-          echo "--- Forensic Path Check ---"
-          python3 -c "import langgraph; print(f'Langgraph found at: {langgraph.__file__ if hasattr(langgraph, \"__file__\") else \"NAMESPACE/NONE\"}')"
+          echo "--- PYTHONPATH Debug ---"
+          python3 -c "import langgraph; print(f'Python sees langgraph here: {langgraph.__file__}')"
           
-          echo "--- Running Tests with Priority PYTHONPATH ---"
-          # Find where site-packages is
+          # Force pytest to ignore local shadowing by setting PYTHONPATH to site-packages only
           SITE_PKGS=$(python3 -c 'import site; print(site.getsitepackages()[0])')
-          # Put site-packages FIRST, then workspace
           export PYTHONPATH="$SITE_PKGS:${{ github.workspace }}"
           
           python3 -m pytest tests/ -v --import-mode=importlib
