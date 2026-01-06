@@ -50,20 +50,39 @@ sequenceDiagram
     participant LLM as Job Scout (DeepSeek R1)
     participant EMB as Embedding Service
     participant PC as Pinecone
+    participant MM as Matchmaker Agent
     participant SYN as Response Synthesizer
 
-    UI->>API: POST /api/v1/vacancies/chat (message + optional context)
-    API->>ORC: create state (message, history, persona?)
-    ORC->>LLM: intent extraction prompt
-    LLM-->>ORC: structured filters + query text
-    ORC->>EMB: /embed (query text)
-    EMB-->>ORC: query vector
-    ORC->>PC: query(namespace="vacancies", top_k=K, filters=…)
-    PC-->>ORC: top matches (chunks + metadata)
-    ORC->>SYN: synthesize response using context + user intent
-    SYN-->>ORC: final answer (+ optional structured output)
+    UI->>API: POST /api/v1/vacancies/chat (message + optional persona)
+    
+    alt Persona Available
+        API->>ORC: create state (message, history, persona)
+        ORC->>LLM: intent extraction prompt (with persona context)
+        LLM-->>ORC: structured filters + query text
+        ORC->>EMB: /embed (query text)
+        EMB-->>ORC: query vector
+        ORC->>PC: query(namespace="vacancies", top_k=K, filters=…)
+        PC-->>ORC: top matches (chunks + metadata)
+        ORC->>MM: analyze_match(vacancy, persona)
+        MM-->>ORC: match score + analysis
+        ORC->>SYN: synthesize response with personalized scores
+        SYN-->>ORC: final answer (persona_applied: true)
+    else Persona Missing (CV Missing State)
+        API->>API: Log warning: chat_search_without_persona
+        API->>ORC: create state (message, history, persona=null)
+        ORC->>LLM: intent extraction prompt (broad search)
+        LLM-->>ORC: structured filters + query text (role may be null for "all")
+        ORC->>EMB: /embed (query text)
+        EMB-->>ORC: query vector
+        ORC->>PC: query(namespace="vacancies", top_k=K, filters=…)
+        PC-->>ORC: top matches (chunks + metadata)
+        ORC->>ORC: Set all scores to 0, ai_insight to "CV missing..."
+        ORC->>SYN: synthesize response (broad search)
+        SYN-->>ORC: final answer (persona_applied: false)
+    end
+    
     ORC-->>API: response payload
-    API-->>UI: display answer + items
+    API-->>UI: display answer + items (with persona_applied flag)
 ```
 
 ---

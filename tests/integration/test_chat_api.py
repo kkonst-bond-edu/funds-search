@@ -143,6 +143,10 @@ def test_chat_endpoint_success(
     # Verify ChatSearchAgent methods were called
     mock_chat_agent.interpret_message.assert_called_once()
     mock_chat_agent.format_results_summary.assert_called_once()
+    
+    # Verify persona_applied flag is present in response
+    assert "persona_applied" in data
+    assert isinstance(data["persona_applied"], bool)
 
 
 @patch("src.api.v1.vacancies.get_query_embedding")
@@ -368,4 +372,158 @@ def test_chat_endpoint_data_flow(
 
     # Verify Pinecone was queried
     mock_vector_store.query.assert_called_once()
+    
+    # Verify persona_applied flag is present
+    data = response.json()
+    assert "persona_applied" in data
+    assert isinstance(data["persona_applied"], bool)
+
+
+@patch("src.api.v1.vacancies.get_query_embedding")
+@patch("src.api.v1.vacancies.VectorStore")
+@patch("apps.orchestrator.chat_search.ChatSearchAgent")
+@patch("apps.orchestrator.agents.matchmaker.MatchmakerAgent")
+def test_chat_endpoint_with_persona_returns_persona_applied_true(
+    mock_matchmaker_class,
+    mock_chat_agent_class,
+    mock_vector_store_class,
+    mock_get_embedding,
+    client,
+    mock_vacancy,
+    mock_pinecone_results,
+    mock_query_embedding,
+):
+    """Test that chat endpoint with valid persona returns persona_applied: true."""
+    # Mock ChatSearchAgent
+    mock_chat_agent = MagicMock()
+    mock_chat_agent.interpret_message = AsyncMock(
+        return_value={
+            "role": "Backend Engineer",
+            "skills": ["Python"],
+            "industry": "AI",
+            "location": None,
+            "company_stage": None,
+            "search_mode": "persona",
+            "friendly_reasoning": "Searching for backend roles matching your Python expertise."
+        }
+    )
+    mock_chat_agent.format_results_summary = AsyncMock(
+        return_value="I found 1 matching vacancy for your search."
+    )
+    mock_chat_agent_class.return_value = mock_chat_agent
+    
+    # Mock MatchmakerAgent
+    mock_matchmaker = MagicMock()
+    mock_matchmaker.analyze_match = AsyncMock(
+        return_value={
+            "score": 85,
+            "analysis": "Strong match: Your Python experience aligns well with this role."
+        }
+    )
+    mock_matchmaker_class.return_value = mock_matchmaker
+    
+    # Mock embedding service
+    async def async_get_embedding(*args, **kwargs):
+        return mock_query_embedding
+    mock_get_embedding.side_effect = async_get_embedding
+    
+    # Mock Pinecone VectorStore
+    mock_vector_store = MagicMock()
+    mock_vector_store.query.return_value = mock_pinecone_results
+    mock_vector_store_class.return_value = mock_vector_store
+    
+    # Make request with persona
+    persona_data = {
+        "technical_skills": ["Python", "FastAPI"],
+        "experience_years": 5
+    }
+    
+    response = client.post(
+        "/api/v1/vacancies/chat",
+        json={
+            "message": "Find backend jobs for me",
+            "persona": persona_data
+        }
+    )
+    
+    # Assertions
+    assert response.status_code == 200
+    data = response.json()
+    
+    # Verify persona_applied flag
+    assert "persona_applied" in data
+    assert data["persona_applied"] is True
+    
+    # Verify vacancies have match scores
+    assert len(data["vacancies"]) > 0
+    for vacancy in data["vacancies"]:
+        assert vacancy.get("score", 0) > 0
+        assert "ai_insight" in vacancy
+        assert "CV missing" not in vacancy.get("ai_insight", "")
+
+
+@patch("src.api.v1.vacancies.get_query_embedding")
+@patch("src.api.v1.vacancies.VectorStore")
+@patch("apps.orchestrator.chat_search.ChatSearchAgent")
+def test_chat_endpoint_without_persona_returns_persona_applied_false(
+    mock_chat_agent_class,
+    mock_vector_store_class,
+    mock_get_embedding,
+    client,
+    mock_vacancy,
+    mock_pinecone_results,
+    mock_query_embedding,
+):
+    """Test that chat endpoint without persona returns persona_applied: false."""
+    # Mock ChatSearchAgent
+    mock_chat_agent = MagicMock()
+    mock_chat_agent.interpret_message = AsyncMock(
+        return_value={
+            "role": "Backend Engineer",
+            "skills": ["Python"],
+            "industry": None,
+            "location": None,
+            "company_stage": None,
+            "search_mode": "explicit",
+            "friendly_reasoning": "Performing a general search for Backend Engineer roles."
+        }
+    )
+    mock_chat_agent.format_results_summary = AsyncMock(
+        return_value="I found 1 matching vacancy for your search."
+    )
+    mock_chat_agent_class.return_value = mock_chat_agent
+    
+    # Mock embedding service
+    async def async_get_embedding(*args, **kwargs):
+        return mock_query_embedding
+    mock_get_embedding.side_effect = async_get_embedding
+    
+    # Mock Pinecone VectorStore
+    mock_vector_store = MagicMock()
+    mock_vector_store.query.return_value = mock_pinecone_results
+    mock_vector_store_class.return_value = mock_vector_store
+    
+    # Make request WITHOUT persona
+    response = client.post(
+        "/api/v1/vacancies/chat",
+        json={
+            "message": "Find backend jobs",
+            "persona": None
+        }
+    )
+    
+    # Assertions
+    assert response.status_code == 200
+    data = response.json()
+    
+    # Verify persona_applied flag is False
+    assert "persona_applied" in data
+    assert data["persona_applied"] is False
+    
+    # Verify all vacancies have CV missing message and score = 0
+    assert len(data["vacancies"]) > 0
+    cv_missing_message = "CV missing: Upload your resume in the 'Career & Match Hub' to enable AI matching."
+    for vacancy in data["vacancies"]:
+        assert vacancy.get("score", None) == 0
+        assert vacancy.get("ai_insight") == cv_missing_message
 

@@ -126,6 +126,299 @@ class TestFirecrawlService:
             pass
 
 
+class TestChatEndpointPersonaHandling:
+    """Test CV Missing logic in the /chat endpoint."""
+    
+    @pytest.fixture
+    def mock_persona_data(self):
+        """Create mock persona data for testing."""
+        return {
+            "technical_skills": ["Python", "FastAPI", "PostgreSQL"],
+            "experience_years": 5,
+            "career_goals": "Backend Engineering",
+            "location_preference": "Remote"
+        }
+    
+    @pytest.fixture
+    def mock_vacancy_dict(self):
+        """Create a mock vacancy dict as returned by the API."""
+        return {
+            "title": "Senior Backend Engineer",
+            "company_name": "TestCorp",
+            "company_stage": "Series A",
+            "location": "San Francisco, CA",
+            "industry": "AI",
+            "salary_range": "$150k-$200k",
+            "description_url": "https://example.com/job1",
+            "required_skills": ["Python", "FastAPI", "PostgreSQL"],
+            "remote_option": True,
+            "pinecone_score": 0.85
+        }
+    
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("use_mock", [True, False])
+    async def test_chat_with_valid_persona_returns_persona_applied_true(
+        self, mock_persona_data, mock_vacancy_dict, use_mock
+    ):
+        """Test that valid persona data results in persona_applied: true and match_score > 0."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from fastapi.testclient import TestClient
+        import sys
+        from pathlib import Path
+        
+        # Mock dependencies
+        sys.modules["pinecone"] = MagicMock()
+        sys.modules["langchain_google_genai"] = MagicMock()
+        sys.modules["langgraph"] = MagicMock()
+        
+        from apps.api.main import app
+        
+        client = TestClient(app)
+        
+        # Mock ChatSearchAgent
+        with patch("src.api.v1.vacancies.ChatSearchAgent") as mock_chat_agent_class:
+            mock_chat_agent = MagicMock()
+            mock_chat_agent.interpret_message = AsyncMock(
+                return_value={
+                    "role": "Backend Engineer",
+                    "skills": ["Python"],
+                    "industry": None,
+                    "location": None,
+                    "company_stage": None,
+                    "search_mode": "persona",
+                    "friendly_reasoning": "Searching for backend roles matching your Python expertise."
+                }
+            )
+            mock_chat_agent.format_results_summary = AsyncMock(
+                return_value="Found matching backend roles."
+            )
+            mock_chat_agent_class.return_value = mock_chat_agent
+            
+            # Mock MatchmakerAgent
+            with patch("src.api.v1.vacancies.MatchmakerAgent") as mock_matchmaker_class:
+                mock_matchmaker = MagicMock()
+                mock_matchmaker.analyze_match = AsyncMock(
+                    return_value={
+                        "score": 85,
+                        "analysis": "Strong match: Your Python and FastAPI experience aligns well with this role."
+                    }
+                )
+                mock_matchmaker_class.return_value = mock_matchmaker
+                
+                # Mock embedding and vector store
+                with patch("src.api.v1.vacancies.get_query_embedding") as mock_embedding:
+                    async def async_get_embedding(*args, **kwargs):
+                        return [0.1] * 1024
+                    mock_embedding.side_effect = async_get_embedding
+                    
+                    with patch("src.api.v1.vacancies.VectorStore") as mock_vector_store_class:
+                        mock_vector_store = MagicMock()
+                        mock_vector_store.query.return_value = [
+                            {
+                                "id": "vacancy_1",
+                                "metadata": mock_vacancy_dict,
+                                "score": 0.85
+                            }
+                        ]
+                        mock_vector_store_class.return_value = mock_vector_store
+                        
+                        # Make request with persona
+                        response = client.post(
+                            "/api/v1/vacancies/chat",
+                            json={
+                                "message": "Find backend jobs for me",
+                                "persona": mock_persona_data
+                            }
+                        )
+                        
+                        # Assertions
+                        assert response.status_code == 200
+                        data = response.json()
+                        
+                        # Verify persona_applied flag
+                        assert "persona_applied" in data
+                        assert data["persona_applied"] is True
+                        
+                        # Verify vacancies have match scores > 0
+                        assert len(data["vacancies"]) > 0
+                        for vacancy in data["vacancies"]:
+                            assert vacancy.get("score", 0) > 0
+                            assert vacancy.get("match_score", 0) > 0
+                            assert vacancy.get("persona_applied", False) is True
+                            assert "ai_insight" in vacancy
+                            assert "CV missing" not in vacancy.get("ai_insight", "")
+    
+    @pytest.mark.asyncio
+    async def test_chat_without_persona_returns_persona_applied_false(
+        self, mock_vacancy_dict
+    ):
+        """Test that missing persona data results in persona_applied: false and CV missing message."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from fastapi.testclient import TestClient
+        import sys
+        
+        # Mock dependencies
+        sys.modules["pinecone"] = MagicMock()
+        sys.modules["langchain_google_genai"] = MagicMock()
+        sys.modules["langgraph"] = MagicMock()
+        
+        from apps.api.main import app
+        
+        client = TestClient(app)
+        
+        # Mock ChatSearchAgent
+        with patch("src.api.v1.vacancies.ChatSearchAgent") as mock_chat_agent_class:
+            mock_chat_agent = MagicMock()
+            mock_chat_agent.interpret_message = AsyncMock(
+                return_value={
+                    "role": "Backend Engineer",
+                    "skills": ["Python"],
+                    "industry": None,
+                    "location": None,
+                    "company_stage": None,
+                    "search_mode": "explicit",
+                    "friendly_reasoning": "Performing a general search for Backend Engineer roles."
+                }
+            )
+            mock_chat_agent.format_results_summary = AsyncMock(
+                return_value="Found matching backend roles."
+            )
+            mock_chat_agent_class.return_value = mock_chat_agent
+            
+            # Mock embedding and vector store
+            with patch("src.api.v1.vacancies.get_query_embedding") as mock_embedding:
+                async def async_get_embedding(*args, **kwargs):
+                    return [0.1] * 1024
+                mock_embedding.side_effect = async_get_embedding
+                
+                with patch("src.api.v1.vacancies.VectorStore") as mock_vector_store_class:
+                    mock_vector_store = MagicMock()
+                    mock_vector_store.query.return_value = [
+                        {
+                            "id": "vacancy_1",
+                            "metadata": mock_vacancy_dict,
+                            "score": 0.85
+                        }
+                    ]
+                    mock_vector_store_class.return_value = mock_vector_store
+                    
+                    # Make request WITHOUT persona
+                    response = client.post(
+                        "/api/v1/vacancies/chat",
+                        json={
+                            "message": "Find backend jobs",
+                            "persona": None
+                        }
+                    )
+                    
+                    # Assertions
+                    assert response.status_code == 200
+                    data = response.json()
+                    
+                    # Verify persona_applied flag is False
+                    assert "persona_applied" in data
+                    assert data["persona_applied"] is False
+                    
+                    # Verify all vacancies have CV missing message and score = 0
+                    assert len(data["vacancies"]) > 0
+                    cv_missing_message = "CV missing: Upload your resume in the 'Career & Match Hub' to enable AI matching."
+                    for vacancy in data["vacancies"]:
+                        assert vacancy.get("score", None) == 0
+                        assert vacancy.get("match_score", None) == 0
+                        assert vacancy.get("ai_match_score", None) == 0
+                        assert vacancy.get("ai_insight") == cv_missing_message
+                        assert vacancy.get("match_reason") == cv_missing_message
+                        assert vacancy.get("persona_applied", True) is False
+    
+    @pytest.mark.asyncio
+    async def test_chat_broad_search_without_persona_skips_soft_filter(
+        self, mock_vacancy_dict
+    ):
+        """Test that 'all roles' query without CV skips soft_filter and returns all vacancies."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from fastapi.testclient import TestClient
+        import sys
+        
+        # Mock dependencies
+        sys.modules["pinecone"] = MagicMock()
+        sys.modules["langchain_google_genai"] = MagicMock()
+        sys.modules["langgraph"] = MagicMock()
+        
+        from apps.api.main import app
+        
+        client = TestClient(app)
+        
+        # Create multiple mock vacancies
+        mock_vacancies = [
+            {
+                "id": f"vacancy_{i}",
+                "metadata": {
+                    **mock_vacancy_dict,
+                    "title": f"Role {i}",
+                    "company_name": f"Company {i}"
+                },
+                "score": 0.9 - (i * 0.1)
+            }
+            for i in range(5)
+        ]
+        
+        # Mock ChatSearchAgent to return null role for broad search
+        with patch("src.api.v1.vacancies.ChatSearchAgent") as mock_chat_agent_class:
+            mock_chat_agent = MagicMock()
+            mock_chat_agent.interpret_message = AsyncMock(
+                return_value={
+                    "role": None,  # null role for broad search
+                    "skills": [],
+                    "industry": None,
+                    "location": None,
+                    "company_stage": None,
+                    "search_mode": "explicit",
+                    "friendly_reasoning": "Showing all available vacancies since no CV is uploaded and search is broad."
+                }
+            )
+            mock_chat_agent.format_results_summary = AsyncMock(
+                return_value="Found all available vacancies."
+            )
+            mock_chat_agent_class.return_value = mock_chat_agent
+            
+            # Mock embedding and vector store
+            with patch("src.api.v1.vacancies.get_query_embedding") as mock_embedding:
+                async def async_get_embedding(*args, **kwargs):
+                    return [0.1] * 1024
+                mock_embedding.side_effect = async_get_embedding
+                
+                with patch("src.api.v1.vacancies.VectorStore") as mock_vector_store_class:
+                    mock_vector_store = MagicMock()
+                    mock_vector_store.query.return_value = mock_vacancies
+                    mock_vector_store_class.return_value = mock_vector_store
+                    
+                    # Make request for "all roles" without persona
+                    response = client.post(
+                        "/api/v1/vacancies/chat",
+                        json={
+                            "message": "show all vacancies",
+                            "persona": None
+                        }
+                    )
+                    
+                    # Assertions
+                    assert response.status_code == 200
+                    data = response.json()
+                    
+                    # Verify persona_applied is False
+                    assert data["persona_applied"] is False
+                    
+                    # Verify all vacancies are returned (soft_filter should be skipped)
+                    # Since role is null, filter_vacancies should not filter by role
+                    assert len(data["vacancies"]) == 5
+                    
+                    # Verify all have CV missing message
+                    cv_missing_message = "CV missing: Upload your resume in the 'Career & Match Hub' to enable AI matching."
+                    for vacancy in data["vacancies"]:
+                        assert vacancy.get("ai_insight") == cv_missing_message
+                        assert vacancy.get("score", None) == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

@@ -31,6 +31,13 @@ Purpose:
 - Accepts a user message (and optional history/persona).
 - Returns a synthesized answer plus optional structured items.
 
+**CV Missing State:**
+- If `persona` is not provided or is empty, the system operates in "Broad Search Mode".
+- All vacancies will have `persona_applied: false` and `match_score: 0`.
+- Each vacancy will include `ai_insight: "CV missing: Upload your resume in the 'Career & Match Hub' to enable AI matching."`
+- The response includes `persona_applied: false` flag at the top level.
+- The system logs a warning event: `chat_search_without_persona` when persona is missing.
+
 Example request:
 ```json
 {
@@ -38,7 +45,11 @@ Example request:
   "history": [
     {"role": "user", "content": "I'm a senior ML leader in B2B SaaS."}
   ],
-  "persona_id": "cand_123",
+  "persona": {
+    "technical_skills": ["Python", "ML", "TensorFlow"],
+    "experience_years": 8,
+    "career_goals": "ML Leadership"
+  },
   "limit": 10
 }
 ```
@@ -46,18 +57,42 @@ Example request:
 Typical response (high level):
 ```json
 {
-  "answer": "Based on your preference for remote crypto roles and senior ML leadership...",
-  "filters": {"industry": ["crypto"], "remote": true},
-  "items": [
+  "vacancies": [
     {
       "vacancy_id": "vac_001",
       "title": "Head of ML",
       "company": "ExampleCo",
       "url": "https://...",
       "score": 95,
-      "highlights": ["pricing/marketplace ML", "team leadership"]
+      "match_score": 95,
+      "ai_insight": "Strong match: Your ML leadership experience...",
+      "persona_applied": true
     }
-  ]
+  ],
+  "summary": "Based on your preference for remote crypto roles and senior ML leadership...",
+  "persona_applied": true,
+  "debug_info": {
+    "friendly_reasoning": "Searching for remote crypto roles matching your ML expertise."
+  }
+}
+```
+
+**Response without CV (persona missing):**
+```json
+{
+  "vacancies": [
+    {
+      "vacancy_id": "vac_001",
+      "title": "Head of ML",
+      "company": "ExampleCo",
+      "score": 0,
+      "match_score": 0,
+      "ai_insight": "CV missing: Upload your resume in the 'Career & Match Hub' to enable AI matching.",
+      "persona_applied": false
+    }
+  ],
+  "summary": "Found matching vacancies...",
+  "persona_applied": false
 }
 ```
 

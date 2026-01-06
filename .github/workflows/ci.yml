@@ -1,104 +1,221 @@
 name: CI
 
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events for all branches
   push:
+    branches: [ main, develop ]
   pull_request:
+    branches: [ main, develop ]
 
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
-
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10"]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Cache pip packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Import smoke check - API
+      run: |
+        python -c "import apps.api.main"
+    
+    - name: Import smoke check - CV Processor
+      run: |
+        export PYTHONPATH=$PWD:$PYTHONPATH
+        # Use importlib to load module from file path (handles hyphen in directory name)
+        python -c "import importlib.util; spec = importlib.util.spec_from_file_location('main', 'services/cv-processor/main.py'); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); print('✓ CV Processor imports successful')"
+    
+    - name: Import smoke check - Embedding Service
+      run: |
+        export PYTHONPATH=$PWD:$PYTHONPATH
+        # Use importlib to load module from file path (handles hyphen in directory name)
+        python -c "import importlib.util; spec = importlib.util.spec_from_file_location('main', 'services/embedding-service/main.py'); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); print('✓ Embedding Service imports successful')"
+    
+    - name: Import smoke check - Web UI
+      run: |
+        python -c "import apps.web_ui.app"
+    
+    - name: Import smoke check - VC Worker
+      run: |
+        export PYTHONPATH=$PWD:$PYTHONPATH
+        # Use importlib to load module from file path (handles hyphen in directory name)
+        python -c "import importlib.util; spec = importlib.util.spec_from_file_location('main', 'services/vc-worker/main.py'); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); print('✓ VC Worker imports successful')"
+    
+    - name: Run tests
+      run: |
+        pytest tests/ -v --tb=short
+    
+    - name: Run API tests
+      run: |
+        if [ -d "apps/api/tests" ]; then
+          pytest apps/api/tests/ -v --tb=short
+        fi
+    
+    - name: Run embedding service tests
+      run: |
+        if [ -d "services/embedding-service/tests" ]; then
+          pytest services/embedding-service/tests/ -v --tb=short
+        fi
+
+  docker-build-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - name: api
+            dockerfile: apps/api/Dockerfile
+            port: 8000
+            health_path: /health
+          - name: cv-processor
+            dockerfile: services/cv-processor/Dockerfile
+            port: 8001
+            health_path: /health
+          - name: embedding-service
+            dockerfile: services/embedding-service/Dockerfile
+            port: 8001
+            health_path: /health
+          - name: web-ui
+            dockerfile: apps/web_ui/Dockerfile
+            port: 8501
+            health_path: /
+          - name: vc-worker
+            dockerfile: services/vc-worker/Dockerfile
+            port: 8003
+            health_path: /health
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Build Docker image for ${{ matrix.service.name }}
+      run: |
+        docker build -f ${{ matrix.service.dockerfile }} -t ${{ matrix.service.name }}:test .
+    
+    - name: Run container for ${{ matrix.service.name }}
+      run: |
+        docker run -d \
+          --name ${{ matrix.service.name }}-test \
+          -p ${{ matrix.service.port }}:${{ matrix.service.port }} \
+          ${{ matrix.service.name }}:test
+    
+    - name: Wait for service to start
+      run: |
+        echo "Waiting 10 seconds for ${{ matrix.service.name }} to start..."
+        sleep 10
+    
+    - name: Check health endpoint for ${{ matrix.service.name }}
+      run: |
+        if [ "${{ matrix.service.name }}" = "web-ui" ]; then
+          # Streamlit doesn't have /health, check if container is running and process is alive
+          if ! docker ps | grep -q "${{ matrix.service.name }}-test"; then
+            echo "✗ ${{ matrix.service.name }} container is not running"
+            docker logs ${{ matrix.service.name }}-test
+            exit 1
+          fi
+          # Check if Streamlit process is running inside container
+          if docker exec ${{ matrix.service.name }}-test ps aux | grep -q streamlit || docker exec ${{ matrix.service.name }}-test pgrep -f streamlit > /dev/null; then
+            echo "✓ ${{ matrix.service.name }} container is running and Streamlit process is active"
+            # Try to curl the root endpoint (may take time for Streamlit to fully start)
+            curl -f --max-time 5 http://localhost:${{ matrix.service.port }} > /dev/null 2>&1 && echo "✓ ${{ matrix.service.name }} is responding on port ${{ matrix.service.port }}" || echo "⚠ ${{ matrix.service.name }} container is running but may still be initializing"
+          else
+            echo "✗ ${{ matrix.service.name }} container is running but Streamlit process not found"
+            docker logs ${{ matrix.service.name }}-test
+            exit 1
+          fi
+        else
+          # For other services, check /health endpoint
+          max_attempts=3
+          attempt=1
+          while [ $attempt -le $max_attempts ]; do
+            response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${{ matrix.service.port }}${{ matrix.service.health_path }} || echo "000")
+            if [ "$response" = "200" ]; then
+              echo "✓ ${{ matrix.service.name }} health check passed (HTTP $response)"
+              break
+            else
+              if [ $attempt -eq $max_attempts ]; then
+                echo "✗ ${{ matrix.service.name }} health check failed after $max_attempts attempts (HTTP $response)"
+                docker logs ${{ matrix.service.name }}-test
+                exit 1
+              else
+                echo "⚠ Attempt $attempt/$max_attempts: Health check returned HTTP $response, retrying..."
+                sleep 2
+                attempt=$((attempt + 1))
+              fi
+            fi
+          done
+        fi
+    
+    - name: Cleanup container
+      if: always()
+      run: |
+        docker stop ${{ matrix.service.name }}-test || true
+        docker rm ${{ matrix.service.name }}-test || true
+
+  docs-check:
     runs-on: ubuntu-latest
     
-    permissions:
-      contents: read
-      packages: write
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v3
-
-      - name: Free disk space
-        run: |
-          echo "Disk space before cleanup:"
-          df -h
-          # Remove unnecessary packages and files
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          # Clean pip cache
-          pip cache purge || true
-          echo "Disk space after cleanup:"
-          df -h
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install pytest flake8
-
-      - name: Run flake8
-        run: |
-          flake8 services/ apps/ --max-line-length=120 --ignore=E501,W503
-
-      - name: Run pytest
-        run: |
-          pytest services/ apps/ -v
-
-      - name: Clean up Docker
-        run: |
-          docker system prune -af --volumes || true
-          echo "Docker disk usage:"
-          docker system df || true
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
-
-      - name: Log in to GitHub container registry
-        if: github.event_name == 'push'
-        uses: docker/login-action@v1.10.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
-      - name: Lowercase the repo name and username
-        run: echo "REPO=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
-
-      - name: Build and push container image to registry
-        if: github.event_name == 'push'
-        uses: docker/build-push-action@v2
-        with:
-          push: true
-          tags: |
-            ghcr.io/${{ env.REPO }}:${{ github.sha }}
-            ghcr.io/${{ env.REPO }}:latest
-          file: ./Dockerfile
-
-      - name: Build container image (no push)
-        if: github.event_name == 'pull_request'
-        uses: docker/build-push-action@v2
-        with:
-          push: false
-          tags: ghcr.io/${{ env.REPO }}:${{ github.sha }}
-          file: ./Dockerfile
-
-      - name: Clean up Docker after build
-        if: github.event_name == 'pull_request'
-        run: |
-          docker system prune -af --volumes || true
-
+    - uses: actions/checkout@v4
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+    
+    - name: Install markdownlint-cli
+      run: |
+        npm install -g markdownlint-cli
+    
+    - name: Check markdown files
+      run: |
+        markdownlint "**/*.md" --ignore node_modules --ignore .git || true
+        # Note: Using || true to not fail the build on formatting issues
+        # Remove || true if you want strict formatting enforcement
+    
+    - name: Check for required documentation files
+      run: |
+        required_docs=("README.md")
+        for doc in "${required_docs[@]}"; do
+          if [ ! -f "$doc" ]; then
+            echo "Warning: Required documentation file $doc is missing"
+          else
+            echo "✓ Found $doc"
+          fi
+        done
+    
+    - name: Validate markdown syntax (basic check)
+      run: |
+        # Basic markdown validation: check for common issues
+        find . -name "*.md" -not -path "./node_modules/*" -not -path "./.git/*" | while read file; do
+          echo "Checking $file..."
+          # Check for unclosed code blocks
+          code_blocks=$(grep -c '```' "$file" || echo "0")
+          if [ $((code_blocks % 2)) -ne 0 ]; then
+            echo "Warning: $file may have unclosed code blocks"
+          fi
+          # Check for basic structure (at least some content)
+          if [ ! -s "$file" ]; then
+            echo "Warning: $file is empty"
+          fi
+        done

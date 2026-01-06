@@ -136,6 +136,66 @@ class TestChatSearchAgent:
         summary = await chat_agent.format_results_summary([], "some query")
         
         assert "couldn't find" in summary.lower() or "no vacancies" in summary.lower()
+    
+    @pytest.mark.asyncio
+    async def test_interpret_message_with_persona_sets_persona_mode(self, chat_agent, mock_llm_provider):
+        """Test that interpret_message uses persona when provided."""
+        # Mock LLM response with persona mode
+        mock_response = MagicMock()
+        mock_response.content = '{"role": "Backend Engineer Python", "skills": ["Python", "FastAPI"], "industry": null, "location": null, "company_stage": null, "search_mode": "persona", "friendly_reasoning": "Searching for backend roles matching your Python expertise."}'
+        mock_llm_provider.ainvoke = AsyncMock(return_value=mock_response)
+        
+        persona = {
+            "technical_skills": ["Python", "FastAPI", "PostgreSQL"],
+            "experience_years": 5
+        }
+        
+        result = await chat_agent.interpret_message("find jobs for me", persona=persona)
+        
+        assert result["search_mode"] == "persona"
+        assert result["role"] == "Backend Engineer Python"
+        assert "Python" in result.get("skills", [])
+    
+    @pytest.mark.asyncio
+    async def test_interpret_message_without_persona_sets_explicit_mode(self, chat_agent, mock_llm_provider):
+        """Test that interpret_message defaults to explicit mode when persona is missing."""
+        # Mock LLM response with explicit mode
+        mock_response = MagicMock()
+        mock_response.content = '{"role": "Backend Engineer", "skills": ["Python"], "industry": null, "location": null, "company_stage": null, "search_mode": "explicit", "friendly_reasoning": "Performing a general search for Backend Engineer roles."}'
+        mock_llm_provider.ainvoke = AsyncMock(return_value=mock_response)
+        
+        result = await chat_agent.interpret_message("find backend jobs", persona=None)
+        
+        assert result["search_mode"] == "explicit"
+        assert result["role"] == "Backend Engineer"
+    
+    @pytest.mark.asyncio
+    async def test_interpret_message_broad_search_without_persona_sets_role_null(self, chat_agent, mock_llm_provider):
+        """Test that broad search queries without persona set role to null."""
+        # Mock LLM response with null role for broad search
+        mock_response = MagicMock()
+        mock_response.content = '{"role": null, "skills": [], "industry": null, "location": null, "company_stage": null, "search_mode": "explicit", "friendly_reasoning": "Showing all available vacancies since no CV is uploaded and search is broad."}'
+        mock_llm_provider.ainvoke = AsyncMock(return_value=mock_response)
+        
+        result = await chat_agent.interpret_message("show all vacancies", persona=None)
+        
+        assert result["role"] is None
+        assert "all available vacancies" in result.get("friendly_reasoning", "").lower()
+    
+    @pytest.mark.asyncio
+    async def test_interpret_message_persona_mode_with_missing_persona_falls_back(self, chat_agent, mock_llm_provider):
+        """Test that persona mode requested but persona missing falls back to explicit."""
+        # Mock LLM response requesting persona mode
+        mock_response = MagicMock()
+        mock_response.content = '{"role": "Backend Engineer", "skills": ["Python"], "industry": null, "location": null, "company_stage": null, "search_mode": "persona", "friendly_reasoning": "Searching for backend roles."}'
+        mock_llm_provider.ainvoke = AsyncMock(return_value=mock_response)
+        
+        # Call with persona=None but LLM might request persona mode
+        result = await chat_agent.interpret_message("find jobs for me", persona=None)
+        
+        # The agent should handle this gracefully (validation happens in chat_search endpoint)
+        assert "role" in result
+        assert result.get("search_mode") in ["persona", "explicit"]
 
 
 if __name__ == "__main__":

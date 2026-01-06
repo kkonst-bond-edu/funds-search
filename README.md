@@ -101,14 +101,24 @@ graph TD
 
 ## 📋 Agent Roles (The Agentic Fleet)
 
-We avoid a single “all-knowing bot”. Each role is specialized, cheaper to run, and easier to debug.
+We avoid a single "all-knowing bot". Each role is specialized, cheaper to run, and easier to debug.
 
 | Agent | Role | Model (Provider) | What it does |
 |------:|------|------------------|--------------|
 | **Talent Strategist 🕵️‍♂️** | Profiler | **DeepSeek V3** (cheap/fast) | Parses CV / interview answers → extracts skills & preferences → produces a **UserPersona JSON** |
-| **Job Scout 🛰️** | Intent Extractor | **DeepSeek R1** (reasoning) | Converts vague user intent (“like Google but in crypto”) → **structured filters + vector query** |
-| **Matchmaker 🤝** | RAG Logic | **GPT-4o / Claude 3.5** | Takes top-K results → compares vs persona → explains why it’s a strong match (score + reasoning) |
+| **Job Scout 🛰️** | Intent Extractor | **DeepSeek R1** (reasoning) | Converts vague user intent ("like Google but in crypto") → **structured filters + vector query** |
+| **Matchmaker 🤝** | RAG Logic | **GPT-4o / Claude 3.5** | Takes top-K results → compares vs persona → explains why it's a strong match (score + reasoning) |
 | **Hunter Agent 🏹** | Real-time Scraper | **Firecrawl / APIs** | Wakes up if cache/DB is empty → fetches fresh jobs → returns items for indexing |
+
+### CV Missing State
+
+The system gracefully handles cases where a user hasn't uploaded their CV:
+
+- **Broad Search Mode**: When `persona` is missing, the system performs a general search without personalized matching
+- **Response Flags**: All vacancies include `persona_applied: false` and `match_score: 0`
+- **User Guidance**: Each vacancy displays: `"CV missing: Upload your resume in the 'Career & Match Hub' to enable AI matching."`
+- **Logging**: The system logs a `chat_search_without_persona` warning event when persona data is absent
+- **UI Feedback**: The web UI displays a warning banner and "Resume Required" badges when CV is missing
 
 > Provider choice is configuration. The docs describe intent; your `.env` decides which providers are enabled.
 

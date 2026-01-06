@@ -238,6 +238,8 @@ IMPORTANT: Extract ONLY the search parameters explicitly mentioned in the CURREN
                 "company_stage": extracted_params.get("company_stage"),
                 "required_keywords": extracted_params.get("required_keywords"),
                 "search_mode": extracted_params.get("search_mode"),  # Will validate and default below
+                "friendly_reasoning": extracted_params.get("friendly_reasoning"),  # Extract friendly_reasoning from Job Scout response
+                "remote_available": extracted_params.get("remote_available"),  # Extract remote_available from Job Scout response
             }
             
             # Validate and normalize search_mode - default to "explicit" if missing, null, or invalid
@@ -245,26 +247,9 @@ IMPORTANT: Extract ONLY the search parameters explicitly mentioned in the CURREN
             # the system respects the user's specific typed query rather than forcing CV data
             search_mode = result.get("search_mode")
             
-            # CRITICAL: If user mentions a specific job title, ALWAYS force explicit mode
-            # has_job_title was already computed above when building context (reuse the variable)
-            
-            # Also check if LLM extracted a role - if it did, that's a strong signal for explicit mode
-            extracted_role = result.get("role")
-            has_extracted_role = extracted_role is not None and len(extracted_role.strip()) > 0
-            
-            # Force explicit mode if job title is detected or role was extracted
-            if has_job_title or has_extracted_role:
-                if search_mode == "persona":
-                    logger.warning(
-                        "search_mode_overridden_to_explicit",
-                        original_mode=search_mode,
-                        user_input=user_input_lower,
-                        extracted_role=extracted_role,
-                        has_job_title_keyword=has_job_title,
-                        message="Forcing explicit mode because user mentioned specific job title"
-                    )
-                search_mode = "explicit"
-                result["search_mode"] = search_mode
+            # Let the LLM decide the search_mode based on the prompt rules
+            # The prompt prioritizes persona mode when "me", "my", or "for me" is mentioned
+            # We trust the LLM's decision and don't override it here
             
             # Check if search_mode is missing, null, or invalid - default to "explicit" for safety
             if not search_mode or search_mode not in ["persona", "explicit"]:
@@ -301,7 +286,9 @@ IMPORTANT: Extract ONLY the search parameters explicitly mentioned in the CURREN
             
             elif search_mode == "persona":
                 # Persona mode: Use Persona as the default base. Fill missing fields from persona.
-                if persona:
+                # CRITICAL: Only use persona data if it's actually available and valid
+                # Don't "fake" a match if CV is empty - fall back to explicit mode behavior
+                if persona and isinstance(persona, dict) and len(persona) > 0:
                     # Fill role from persona if missing
                     if not result.get("role") and persona.get("career_goals"):
                         career_goals = persona.get("career_goals", [])
@@ -356,6 +343,14 @@ IMPORTANT: Extract ONLY the search parameters explicitly mentioned in the CURREN
                         skills_count=len(result.get("skills") or []),
                         message="Using persona as base for search"
                     )
+                else:
+                    # Persona mode requested but no persona data available
+                    # Don't fake a match - log warning and proceed without persona enrichment
+                    logger.warning(
+                        "persona_mode_without_persona",
+                        search_mode=search_mode,
+                        message="Persona mode requested but no persona data available. Proceeding without persona enrichment."
+                    )
 
             # Convert empty strings to None
             for key in result:
@@ -395,6 +390,8 @@ IMPORTANT: Extract ONLY the search parameters explicitly mentioned in the CURREN
                 "company_stage": None,
                 "search_mode": "explicit",  # Default fallback
                 "required_keywords": None,
+                "friendly_reasoning": None,  # Missing on parse error
+                "remote_available": None,  # Missing on parse error
                 "debug_info": {
                     "extracted_role": None,
                     "identified_filters": {},

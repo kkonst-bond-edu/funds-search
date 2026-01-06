@@ -58,7 +58,15 @@ class ChatRequest(BaseModel):
     """Request schema for chat endpoint."""
     message: str = Field(..., description="Natural language search query")
     history: Optional[List[dict]] = Field(default=[], description="Previous conversation messages")
-    persona: Optional[dict] = Field(default=None, description="User persona/CV information for personalized search")
+    persona: Optional[Dict[str, Any]] = Field(default=None, description="User persona/CV information for personalized search")
+
+
+class ChatResponse(BaseModel):
+    """Response schema for chat endpoint."""
+    vacancies: List[Dict[str, Any]] = Field(..., description="List of matching vacancies with match scores and AI insights")
+    summary: str = Field(..., description="AI-generated summary explaining the results")
+    debug_info: Dict[str, Any] = Field(default_factory=dict, description="Debug information including friendly_reasoning")
+    persona_applied: bool = Field(..., description="Flag indicating if persona data was successfully used for matching")
 
 
 class VacancySearchResponse(BaseModel):
@@ -135,76 +143,80 @@ def filter_vacancies(vacancies: list[Vacancy], filter_params: VacancyFilter) -> 
         "usa": ["us", "united states", "america", "u.s.", "u.s.a."],
     }
 
+    # Skip role filtering if role is None, empty, or indicates "all" search
+    # This ensures that when Job Scout sets role to null for broad queries, all vacancies pass through
     if filter_params.role:
-        # Smart Keyword Matcher for role filtering
         role_lower = filter_params.role.lower().strip()
-        
-        # Word stem mapping for common variations (engineering -> engineer, etc.)
-        word_stem_map = {
-            "engineering": "engineer",
-            "engineer": "engineer",
-            "developing": "developer",
-            "developer": "developer",
-            "development": "developer",
-            "architecting": "architect",
-            "architect": "architect",
-            "scientist": "scientist",
-            "science": "scientist",
-            "analyst": "analyst",
-            "analysis": "analyst",
-            "manager": "manager",
-            "management": "manager",
-            "director": "director",
-            "directing": "director",
-            "specialist": "specialist",
-            "consultant": "consultant",
-            "designer": "designer",
-            "designing": "designer",
-            "programmer": "programmer",
-            "programming": "programmer"
-        }
-        
-        # Role modifiers that MUST be present (frontend, backend, mobile, ai, etc.)
-        role_modifiers = ["frontend", "front-end", "backend", "back-end", "fullstack", "full-stack", 
-                         "full stack", "mobile", "web", "ai", "ml", "machine learning", "data", 
-                         "devops", "sre", "qa", "test", "testing", "security", "cloud", "embedded",
-                         "ios", "android", "react", "vue", "angular", "node", "python", "java", "go"]
-        
-        # Extract role words and normalize stems
-        role_words = [w for w in role_lower.split() if len(w) > 2]
-        normalized_words = []
-        modifier_keywords = []
-        
-        for word in role_words:
-            # Check if it's a modifier
-            if any(mod in word for mod in role_modifiers):
-                modifier_keywords.append(word)
-            # Normalize word stems
-            normalized = word_stem_map.get(word, word)
-            normalized_words.append(normalized)
-        
-        # Build match criteria
-        def matches_role(vacancy):
-            title_lower = vacancy.title.lower()
-            skills_lower = " ".join([s.lower() for s in vacancy.required_skills])
-            combined_text = f"{title_lower} {skills_lower}"
+        # If role is "all", "any", "everything", or empty after strip, skip filtering entirely
+        # This allows truly broad searches without title-based filtering
+        if role_lower and role_lower not in ["all", "any", "everything", "null", "none"]:
+            # Smart Keyword Matcher for role filtering
+            # Word stem mapping for common variations (engineering -> engineer, etc.)
+            word_stem_map = {
+                "engineering": "engineer",
+                "engineer": "engineer",
+                "developing": "developer",
+                "developer": "developer",
+                "development": "developer",
+                "architecting": "architect",
+                "architect": "architect",
+                "scientist": "scientist",
+                "science": "scientist",
+                "analyst": "analyst",
+                "analysis": "analyst",
+                "manager": "manager",
+                "management": "manager",
+                "director": "director",
+                "directing": "director",
+                "specialist": "specialist",
+                "consultant": "consultant",
+                "designer": "designer",
+                "designing": "designer",
+                "programmer": "programmer",
+                "programming": "programmer"
+            }
             
-            # Check if any normalized word matches in title (prioritize title matches)
-            # This handles "engineering" -> "engineer" matching
-            title_match = any(norm_word in title_lower for norm_word in normalized_words)
+            # Role modifiers that MUST be present (frontend, backend, mobile, ai, etc.)
+            role_modifiers = ["frontend", "front-end", "backend", "back-end", "fullstack", "full-stack", 
+                             "full stack", "mobile", "web", "ai", "ml", "machine learning", "data", 
+                             "devops", "sre", "qa", "test", "testing", "security", "cloud", "embedded",
+                             "ios", "android", "react", "vue", "angular", "node", "python", "java", "go"]
             
-            # If modifiers are present (e.g., "frontend", "backend", "mobile"), they MUST be in title or skills
-            modifier_match = True
-            if modifier_keywords:
-                modifier_match = any(mod in combined_text for mod in modifier_keywords)
+            # Extract role words and normalize stems
+            role_words = [w for w in role_lower.split() if len(w) > 2]
+            normalized_words = []
+            modifier_keywords = []
             
-            # Prioritize title matches - if role words match in title, it's a strong match
-            # This ensures "Backend Engineer" matches "Backend Software Engineer" in title
-            return title_match and modifier_match
-        
-        # Filter with smart matching - prioritize title matches
-        # Results are sorted by vector search, so title matches will naturally rank higher
-        filtered = [v for v in filtered if matches_role(v)]
+            for word in role_words:
+                # Check if it's a modifier
+                if any(mod in word for mod in role_modifiers):
+                    modifier_keywords.append(word)
+                # Normalize word stems
+                normalized = word_stem_map.get(word, word)
+                normalized_words.append(normalized)
+            
+            # Build match criteria
+            def matches_role(vacancy):
+                title_lower = vacancy.title.lower()
+                skills_lower = " ".join([s.lower() for s in vacancy.required_skills])
+                combined_text = f"{title_lower} {skills_lower}"
+                
+                # Check if any normalized word matches in title (prioritize title matches)
+                # This handles "engineering" -> "engineer" matching
+                title_match = any(norm_word in title_lower for norm_word in normalized_words)
+                
+                # If modifiers are present (e.g., "frontend", "backend", "mobile"), they MUST be in title or skills
+                modifier_match = True
+                if modifier_keywords:
+                    modifier_match = any(mod in combined_text for mod in modifier_keywords)
+                
+                # Prioritize title matches - if role words match in title, it's a strong match
+                # This ensures "Backend Engineer" matches "Backend Software Engineer" in title
+                return title_match and modifier_match
+            
+            # Filter with smart matching - prioritize title matches
+            # Results are sorted by vector search, so title matches will naturally rank higher
+            filtered = [v for v in filtered if matches_role(v)]
 
     if filter_params.skills:
         # Soft skill filtering: require at least ONE skill match instead of ALL skills
@@ -334,14 +346,14 @@ def apply_soft_title_filter(vacancies: list[Vacancy], role_query: Optional[str])
 
 def apply_hard_keyword_filter(vacancies: list[Vacancy], required_keywords: Optional[List[str]]) -> list[Vacancy]:
     """
-    Apply hard keyword filter using required_keywords.
+    Apply keyword match filter using required_keywords with OR logic.
     
-    Vacancies MUST contain at least one of the required keywords in their
-    title or required_skills to pass this filter.
+    Vacancies must match at least ONE of the required keywords in their
+    title or required_skills to pass this filter (OR logic, not AND).
     
     Args:
         vacancies: List of vacancies to filter
-        required_keywords: List of critical keywords that must be present
+        required_keywords: List of critical keywords
         
     Returns:
         Filtered list of vacancies
@@ -355,14 +367,40 @@ def apply_hard_keyword_filter(vacancies: list[Vacancy], required_keywords: Optio
     if not keywords_lower:
         return vacancies
     
+    # Add synonyms for common terms (e.g., "Database" -> ["database", "db", "sql", "postgresql", "mysql"])
+    keyword_synonyms = {}
+    for kw in keywords_lower:
+        synonyms = [kw]  # Start with the keyword itself
+        if "database" in kw or "db" in kw:
+            synonyms.extend(["database", "db", "sql", "postgresql", "postgres", "mysql", "mongodb", "redis"])
+        elif "python" in kw:
+            synonyms.extend(["python", "py", "django", "flask", "fastapi"])
+        elif "javascript" in kw or "js" in kw:
+            synonyms.extend(["javascript", "js", "node", "nodejs", "typescript", "ts"])
+        keyword_synonyms[kw] = synonyms
+    
     filtered = []
     for vacancy in vacancies:
         title_lower = vacancy.title.lower()
+        # Check both title and required_skills list
         skills_lower = [s.lower() for s in vacancy.required_skills]
         combined_text = f"{title_lower} {' '.join(skills_lower)}"
         
-        # Check if at least one required keyword is present
-        has_keyword = any(kw in combined_text for kw in keywords_lower)
+        # Check if at least ONE required keyword (or its synonym) is present
+        has_keyword = False
+        for kw in keywords_lower:
+            # Check the keyword itself
+            if kw in combined_text:
+                has_keyword = True
+                break
+            # Check synonyms if available
+            if kw in keyword_synonyms:
+                for synonym in keyword_synonyms[kw]:
+                    if synonym in combined_text:
+                        has_keyword = True
+                        break
+                if has_keyword:
+                    break
         
         if has_keyword:
             filtered.append(vacancy)
@@ -578,13 +616,14 @@ def build_search_query(filter_params: VacancyFilter, persona: Optional[dict] = N
     return ". ".join(query_parts) + "."
 
 
-def build_pinecone_filter(filter_params: VacancyFilter) -> Optional[Dict[str, Any]]:
+def build_pinecone_filter(filter_params: VacancyFilter, remote_available: Optional[bool] = None) -> Optional[Dict[str, Any]]:
     """
     Build Pinecone filter dictionary from filter parameters.
-    Uses metadata filters for industry, location, and company_stage.
+    Uses metadata filters for industry, location, company_stage, and remote_available.
     
     Args:
         filter_params: VacancyFilter with search criteria
+        remote_available: Optional boolean from Job Scout response for remote_available field
         
     Returns:
         Pinecone filter dictionary or None
@@ -605,8 +644,13 @@ def build_pinecone_filter(filter_params: VacancyFilter) -> Optional[Dict[str, An
         # Use exact match - case-insensitive filtering happens in Python
         filter_dict["location"] = {"$eq": filter_params.location}
     
-    # For remote_option, we can use exact boolean match
-    if filter_params.is_remote is not None:
+    # Boolean filtering: Handle remote_available from Job Scout response
+    # Priority: remote_available parameter > filter_params.is_remote
+    if remote_available is not None:
+        # Use remote_available field from Job Scout response
+        filter_dict["remote_available"] = {"$eq": remote_available}
+    elif filter_params.is_remote is not None:
+        # Fallback to filter_params.is_remote (for backward compatibility)
         filter_dict["remote_option"] = {"$eq": filter_params.is_remote}
     
     # Metadata filtering: Use Pinecone metadata filters for company_stage
@@ -1147,8 +1191,8 @@ async def search_vacancies(
         ) from e
 
 
-@router.post("/chat")
-async def chat_search(request: ChatRequest) -> Dict[str, Any]:
+@router.post("/chat", response_model=ChatResponse)
+async def chat_search(request: ChatRequest) -> ChatResponse:
     """
     Conversational vacancy search endpoint.
     
@@ -1169,9 +1213,16 @@ async def chat_search(request: ChatRequest) -> Dict[str, Any]:
     try:
         logger.info("chat_search_requested", message_length=len(request.message))
         
+        # Fallback: Log warning if persona is missing
+        if not request.persona:
+            logger.warning("chat_search_without_persona", detail="Chat request received without persona data. Matchmaker will return low scores.")
+        else:
+            logger.info("chat_search_with_persona", persona_keys=list(request.persona.keys()) if isinstance(request.persona, dict) else "not_dict")
+        
         # Initialize chat search agent
         chat_agent = ChatSearchAgent()
         
+        # Orchestration: Pass persona to chat_search_agent.interpret_message()
         # Interpret user message to extract search parameters
         # Pass history and persona for context-aware search
         extracted_params = await chat_agent.interpret_message(
@@ -1260,6 +1311,18 @@ async def chat_search(request: ChatRequest) -> Dict[str, Any]:
         else:
             required_keywords = None
         
+        # Extract remote_available boolean from Job Scout response
+        remote_available = extracted_params.get("remote_available")
+        if remote_available is not None:
+            # Ensure it's a boolean
+            if isinstance(remote_available, bool):
+                pass  # Already boolean
+            elif isinstance(remote_available, str):
+                remote_available = remote_available.lower() in ("true", "1", "yes")
+            else:
+                remote_available = bool(remote_available)
+            logger.info("remote_available_extracted", remote_available=remote_available)
+        
         # Use the expanded role query directly from Job Scout (it's already optimized)
         # The role field now contains an expanded search query, not just a job title
         if filter_params.role:
@@ -1291,14 +1354,14 @@ async def chat_search(request: ChatRequest) -> Dict[str, Any]:
         query_embedding = await get_query_embedding(search_query, embedding_service_url)
         logger.info("chat_query_embedding_generated", dim=len(query_embedding))
         
-        # Build Pinecone filter
-        pinecone_filter = build_pinecone_filter(filter_params)
-        logger.info("chat_pinecone_filter_built", filter=pinecone_filter)
+        # Build Pinecone filter with remote_available from Job Scout response
+        pinecone_filter = build_pinecone_filter(filter_params, remote_available=remote_available)
+        logger.info("chat_pinecone_filter_built", filter=pinecone_filter, remote_available=remote_available)
         
         # Initialize Pinecone client
         vector_store = VectorStore()
         
-        # Query Pinecone with top_k=40 for hybrid filtering
+        # Query Pinecone with top_k=40 to ensure we have enough candidates before filtering
         top_k = 40
         results = vector_store.query(
             query_vector=query_embedding,
@@ -1404,21 +1467,22 @@ async def chat_search(request: ChatRequest) -> Dict[str, Any]:
                 stages=filter_params.company_stages
             )
         
-        # Step 4: Apply HARD keyword filter (required_keywords) - STRICT FILTER
-        # This is a strict requirement: vacancies MUST contain at least one required keyword
-        # Vacancies that don't match are removed, regardless of semantic score
+        # Step 4: Apply keyword filter (required_keywords) - OR LOGIC
+        # This is an OR match requirement: vacancies must match at least ONE required keyword
+        # Vacancies that don't match any keyword are removed, regardless of semantic score
         # This filter is applied AFTER metadata filters but BEFORE ranking
         if required_keywords:
             before_keywords = len(filtered_vacancies)
             filtered_vacancies = apply_hard_keyword_filter(filtered_vacancies, required_keywords)
             logger.info(
-                "hard_keyword_filter_applied",
+                "keyword_filter_applied",
                 required_keywords=required_keywords,
                 before=before_keywords,
                 after=len(filtered_vacancies),
-                message="Hard filter: vacancies without required keywords removed before ranking"
+                logic="OR (at least one keyword must match)",
+                message="Keyword filter: vacancies must match at least one required keyword"
             )
-            # NO FALLBACK - if hard filter returns 0 results, that's the result
+            # NO FALLBACK - if filter returns 0 results, that's the result
         
         # ========================================================================
         # SOFT FILTERING: Apply soft filters AFTER hard filters
@@ -1428,14 +1492,18 @@ async def chat_search(request: ChatRequest) -> Dict[str, Any]:
         # ========================================================================
         
         # Step 5: Apply Soft Title Filter (exclude conflicting terms)
+        # Skip soft title filter if role is None, empty, or indicates "all" search
         if filter_params.role:
-            before_soft = len(filtered_vacancies)
-            filtered_vacancies = apply_soft_title_filter(filtered_vacancies, filter_params.role)
-            logger.info(
-                "soft_title_filter_applied",
-                before=before_soft,
-                after=len(filtered_vacancies)
-            )
+            role_lower = filter_params.role.lower().strip() if filter_params.role else ""
+            # Only apply soft filter if role is not empty and not a special "all" keyword
+            if role_lower and role_lower not in ["all", "any", "everything", "null", "none"]:
+                before_soft = len(filtered_vacancies)
+                filtered_vacancies = apply_soft_title_filter(filtered_vacancies, filter_params.role)
+                logger.info(
+                    "soft_title_filter_applied",
+                    before=before_soft,
+                    after=len(filtered_vacancies)
+                )
         
         # Step 6: Apply remaining soft filters (skills - at least one match)
         # Note: Skills are soft filters (at least one match), not hard filters
@@ -1497,8 +1565,12 @@ async def chat_search(request: ChatRequest) -> Dict[str, Any]:
             else:
                 vacancy_dict['pinecone_score'] = None
             
-            # Ensure min_salary is included if available (from parsed salary_range)
-            # This is extracted from Pinecone metadata in metadata_to_vacancy()
+            # METADATA MAPPING: Ensure industry, salary_min, and company_stage are correctly extracted
+            # Industry: extracted from Pinecone metadata in metadata_to_vacancy()
+            if 'industry' not in vacancy_dict or not vacancy_dict.get('industry'):
+                vacancy_dict['industry'] = vacancy.industry if hasattr(vacancy, 'industry') else "Technology"
+            
+            # Salary_min: extracted from Pinecone metadata in metadata_to_vacancy()
             if hasattr(vacancy, 'min_salary') and vacancy.min_salary is not None:
                 vacancy_dict['min_salary'] = vacancy.min_salary
             elif vacancy_dict.get('salary_range'):
@@ -1506,14 +1578,16 @@ async def chat_search(request: ChatRequest) -> Dict[str, Any]:
                 min_salary = parse_min_salary_from_range(vacancy_dict.get('salary_range'))
                 if min_salary:
                     vacancy_dict['min_salary'] = min_salary
+                else:
+                    vacancy_dict['min_salary'] = None
             else:
                 # Explicitly set to None if not available
                 vacancy_dict['min_salary'] = None
             
-            # Ensure industry is included (extracted from Pinecone metadata)
-            # This should already be there from metadata_to_vacancy(), but ensure it's present
-            if 'industry' not in vacancy_dict or not vacancy_dict.get('industry'):
-                vacancy_dict['industry'] = vacancy.industry if hasattr(vacancy, 'industry') else "Technology"
+            # Company_stage: extracted from Pinecone metadata in metadata_to_vacancy()
+            # This should already be present, but ensure it's correctly mapped
+            if 'company_stage' not in vacancy_dict:
+                vacancy_dict['company_stage'] = vacancy.company_stage.value if hasattr(vacancy.company_stage, 'value') else str(vacancy.company_stage)
             
             # Ensure all required fields are present for frontend
             # These are extracted from Pinecone metadata in metadata_to_vacancy()
@@ -1528,20 +1602,39 @@ async def chat_search(request: ChatRequest) -> Dict[str, Any]:
             
             vacancies_response.append(vacancy_dict)
 
-        # Use MatchmakerAgent to analyze top vacancies if persona is provided
-        # Analyze top 10 candidates from the filtered results, then sort by AI score
-        # This ensures we get the best matches based on AI analysis, not just vector similarity
-        top_vacancies_for_matching = vacancies_response[:10] if len(vacancies_response) > 0 else []
+        # ========================================================================
+        # MATCHMAKER INTEGRATION (CRITICAL): Analyze ALL filtered vacancies
+        # ========================================================================
+        # After getting filtered results from Pinecone, iterate through them
+        # and call matchmaker_agent.analyze_match(vacancy_text, persona)
+        # The Matchmaker must return a JSON with 'score' (0-100) and 'analysis' (text)
+        # ========================================================================
         
-        if request.persona and top_vacancies_for_matching:
-            logger.info("matchmaker_analysis_started", vacancy_count=len(top_vacancies_for_matching))
-            matchmaker = MatchmakerAgent()
+        # Check if persona data is available and valid
+        has_persona = bool(request.persona) and isinstance(request.persona, dict) and len(request.persona) > 0
+        persona_applied = False
+        
+        if vacancies_response:
+            logger.info("matchmaker_analysis_started", vacancy_count=len(vacancies_response), has_persona=has_persona)
             
-            # Analyze each vacancy with matchmaker (with fail-safe error handling)
+            if has_persona:
+                matchmaker = MatchmakerAgent()
+            
+            # Iterate through all vacancies after filtering
             successful_analyses = 0
-            for vacancy_dict in top_vacancies_for_matching:
+            for vacancy_dict in vacancies_response:
                 try:
-                    # Get vacancy text from the vacancy dict
+                    # If persona is missing, set default values without calling matchmaker
+                    if not has_persona:
+                        vacancy_dict['score'] = 0
+                        vacancy_dict['match_score'] = 0
+                        vacancy_dict['ai_match_score'] = 0
+                        vacancy_dict['ai_insight'] = "CV missing: Upload your resume in the 'Career & Match Hub' to enable AI matching."
+                        vacancy_dict['match_reason'] = "CV missing: Upload your resume in the 'Career & Match Hub' to enable AI matching."
+                        vacancy_dict['persona_applied'] = False
+                        continue
+                    
+                    # Build vacancy text from the vacancy dict for matchmaker analysis
                     vacancy_text = f"""
 Title: {vacancy_dict.get('title', 'Unknown')}
 Company: {vacancy_dict.get('company_name', 'Unknown')}
@@ -1557,104 +1650,155 @@ Description URL: {vacancy_dict.get('description_url', 'N/A')}
                     # Get Pinecone score for this vacancy (if available)
                     pinecone_score = vacancy_dict.get('pinecone_score')
                     
-                    # Analyze match with matchmaker agent (with timeout protection)
-                    # The analyze_match method now returns a dict with 'score' and 'reasoning'
+                    # Orchestration: Pass the SAME persona to matchmaker_agent.analyze_match()
+                    # After getting search results, pass the SAME 'persona' to 'matchmaker_agent.analyze_match()'
+                    # The Matchmaker must return a JSON with 'score' (0-100) and 'analysis' (text)
                     match_result = await matchmaker.analyze_match(
                         vacancy_text=vacancy_text,
                         candidate_persona=request.persona,
                         similarity_score=pinecone_score  # Pass Pinecone score for context
                     )
                     
-                    # Handle new return format: dict with 'score' and 'reasoning'
+                    # Parse Matchmaker response
+                    # Expected format: {"score": 0-100, "analysis": "text"} or {"score": 0-10, "reasoning": "text"}
+                    ai_score = None
+                    analysis_text = None
+                    
                     if isinstance(match_result, dict):
+                        # Try to get score (0-100 scale) or fallback to 0-10 scale
                         ai_score = match_result.get('score')
-                        match_reasoning = match_result.get('reasoning', '')
-                        
-                        # Ensure ai_score is an integer (0-10 scale)
-                        if ai_score is not None:
-                            try:
-                                ai_score = int(ai_score)
-                            except (ValueError, TypeError):
-                                logger.warning(
-                                    "ai_score_invalid_type",
-                                    vacancy_title=vacancy_dict.get('title', 'Unknown'),
-                                    ai_score=ai_score
-                                )
-                                ai_score = None
-                        
-                        # Add AI match score and reasoning to vacancy dict
-                        # CRITICAL: Always save the score to response object for UI to read
-                        # Score is on 0-10 scale, UI will convert to percentage
-                        vacancy_dict['ai_match_score'] = ai_score  # 0-10 scale, saved for frontend
-                        
-                        if match_reasoning and len(match_reasoning) > 0:
-                            vacancy_dict['match_reasoning'] = match_reasoning
-                            successful_analyses += 1
-                        else:
-                            logger.warning(
-                                "matchmaker_analysis_empty_response",
-                                vacancy_title=vacancy_dict.get('title', 'Unknown')
-                            )
-                            vacancy_dict['match_reasoning'] = None
-                        
-                        # Log that AI score was saved
-                        logger.debug(
-                            "ai_match_score_saved",
-                            vacancy_title=vacancy_dict.get('title', 'Unknown'),
-                            ai_score=ai_score
-                        )
+                        # Try 'analysis' first, then fallback to 'reasoning'
+                        analysis_text = match_result.get('analysis') or match_result.get('reasoning', '')
+                    elif isinstance(match_result, str):
+                        # If response is a string, try to parse it as JSON or extract score
+                        import json
+                        import re
+                        try:
+                            # Try to parse as JSON
+                            parsed = json.loads(match_result)
+                            ai_score = parsed.get('score')
+                            analysis_text = parsed.get('analysis') or parsed.get('reasoning', '')
+                        except (json.JSONDecodeError, ValueError):
+                            # Try to extract score from string (format: "Score: X/100" or "Score: X/10")
+                            score_pattern_100 = r'Score:\s*(\d+)/100'
+                            score_pattern_10 = r'Score:\s*(\d+)/10'
+                            score_match = re.search(score_pattern_100, match_result, re.IGNORECASE)
+                            if not score_match:
+                                score_match = re.search(score_pattern_10, match_result, re.IGNORECASE)
+                            if score_match:
+                                try:
+                                    ai_score = int(score_match.group(1))
+                                    # If extracted from /10 format, convert to 0-100 scale
+                                    if '/10' in match_result:
+                                        ai_score = ai_score * 10  # Convert 0-10 to 0-100
+                                    ai_score = max(0, min(100, ai_score))  # Clamp to 0-100
+                                    # Remove score line from analysis text
+                                    analysis_text = re.sub(r'Score:\s*\d+/(?:100|10)\s*', '', match_result, flags=re.IGNORECASE).strip()
+                                except (ValueError, TypeError):
+                                    analysis_text = match_result
+                            else:
+                                analysis_text = match_result
                     else:
-                        # Fallback for old format (shouldn't happen, but handle gracefully)
-                        logger.warning("matchmaker_unexpected_format", vacancy_title=vacancy_dict.get('title', 'Unknown'))
-                        if match_result and len(str(match_result)) > 0:
-                            vacancy_dict['match_reasoning'] = str(match_result)
-                            vacancy_dict['ai_match_score'] = None
+                        # Fallback: convert to string
+                        analysis_text = str(match_result) if match_result else None
+                    
+                    # Ensure ai_score is properly converted to integer (0-100 scale)
+                    if ai_score is not None:
+                        try:
+                            # Convert to float first to handle string/float/int inputs
+                            ai_score = float(ai_score)
+                            # If score is in 0-10 range, convert to 0-100
+                            if 0 <= ai_score <= 10:
+                                ai_score = ai_score * 10
+                            # Clamp to valid range (0-100)
+                            ai_score = max(0.0, min(100.0, ai_score))
+                            # Always convert to int for clean UI display
+                            ai_score = int(round(ai_score))
+                        except (ValueError, TypeError) as e:
+                            logger.warning(
+                                "ai_score_invalid_type",
+                                vacancy_title=vacancy_dict.get('title', 'Unknown'),
+                                ai_score=ai_score,
+                                error=str(e)
+                            )
+                            ai_score = 0  # Default to 0 on conversion error
+                    else:
+                        # If score not found, use a default (0)
+                        logger.warning(
+                            "matchmaker_analysis_no_score",
+                            vacancy_title=vacancy_dict.get('title', 'Unknown')
+                        )
+                        ai_score = 0  # Default score if not found
+                    
+                    # SCORE MAPPING: Map 'score' to both 'score' and 'match_score' fields
+                    # This is the primary score field used by UI - ensure it's always an integer (0-100)
+                    vacancy_dict['score'] = ai_score
+                    vacancy_dict['match_score'] = ai_score  # Add match_score field for UI compatibility
+                    
+                    # Also keep ai_match_score for backward compatibility (0-100 scale)
+                    vacancy_dict['ai_match_score'] = ai_score
+                    
+                    # Mark that persona was successfully applied
+                    vacancy_dict['persona_applied'] = True
+                    persona_applied = True
+                    
+                    # Log successful score mapping for debugging
+                    logger.debug(
+                        "matchmaker_score_mapped",
+                        vacancy_title=vacancy_dict.get('title', 'Unknown'),
+                        score=ai_score,
+                        match_score=ai_score,
+                        has_analysis=bool(analysis_text),
+                        persona_applied=True
+                    )
+                    
+                    # SCORE MAPPING: Map 'analysis' to a new field 'ai_insight'
+                    vacancy_dict['ai_insight'] = analysis_text if analysis_text and len(analysis_text) > 0 else None
+                    
+                    # Also keep match_reason for backward compatibility
+                    vacancy_dict['match_reason'] = analysis_text if analysis_text and len(analysis_text) > 0 else None
+                    
+                    if ai_score is not None and ai_score > 0:
+                        successful_analyses += 1
+                        logger.debug(
+                            "matchmaker_analysis_saved",
+                            vacancy_title=vacancy_dict.get('title', 'Unknown'),
+                            score=ai_score,
+                            has_analysis=bool(analysis_text)
+                        )
                     
                 except Exception as e:
-                    logger.warning(
+                    logger.error(
                         "matchmaker_analysis_failed",
                         vacancy_title=vacancy_dict.get('title', 'Unknown'),
                         error=str(e),
                         error_type=type(e).__name__
                     )
                     # Set fallback values instead of leaving them empty
-                    vacancy_dict['match_reasoning'] = "Match analysis temporarily unavailable."
-                    vacancy_dict['ai_match_score'] = None
+                    vacancy_dict['score'] = 0  # Default score (0-100 scale)
+                    vacancy_dict['match_score'] = 0  # Add match_score field for UI compatibility
+                    vacancy_dict['ai_match_score'] = 0
+                    vacancy_dict['persona_applied'] = False
+                    vacancy_dict['ai_insight'] = "Match analysis temporarily unavailable."
+                    vacancy_dict['match_reason'] = "Match analysis temporarily unavailable."
                     # Continue with other vacancies even if one fails
                     continue
             
-            logger.info("matchmaker_analysis_completed", successful=successful_analyses, total=len(top_vacancies_for_matching))
+            logger.info("matchmaker_analysis_completed", successful=successful_analyses, total=len(vacancies_response))
             
-            # Re-rank: Sort vacancies by AI match score (descending) to prioritize best matches
-            # Only vacancies that were analyzed by Matchmaker will have AI scores
+            # ========================================================================
+            # SORTING: Sort the final result list by 'score' (AI Score) descending
+            # ========================================================================
             def sort_key(v):
-                ai_score = v.get('ai_match_score')
-                if ai_score is not None:
-                    return ai_score  # Sort by AI score descending
+                score = v.get('score')
+                if score is not None:
+                    return float(score)  # Sort by score (0-100) descending
                 else:
-                    return -1  # No AI score, sort to end
+                    return -1.0  # No score, sort to end
             
-            # Sort all vacancies by AI score (descending)
+            # Sort all vacancies by score (descending)
             vacancies_response.sort(key=sort_key, reverse=True)
-            
-            # Filter: Only show vacancies with AI score >= 5
-            # This ensures we only show high-quality matches that were analyzed by Matchmaker
-            before_filter = len(vacancies_response)
-            vacancies_response = [
-                v for v in vacancies_response 
-                if v.get('ai_match_score') is not None and v.get('ai_match_score') >= 5
-            ]
-            after_filter = len(vacancies_response)
-            logger.info(
-                "vacancies_filtered_by_ai_score",
-                before_count=before_filter,
-                after_count=after_filter,
-                filtered_out=before_filter - after_filter,
-                threshold=5
-            )
-            
-            # AI scores are already included in each vacancy dict and will be shown in the response
-            logger.info("vacancies_reranked_by_ai_score", final_count=len(vacancies_response))
+            logger.info("vacancies_sorted_by_score", final_count=len(vacancies_response))
         
         # Generate AI summary of results using the top vacancies
         # Convert dicts back to Vacancy objects for the summary function
@@ -1686,14 +1830,26 @@ Description URL: {vacancy_dict.get('description_url', 'N/A')}
 
         # Extract debug_info from extracted_params
         debug_info = extracted_params.get("debug_info", {})
+        if not isinstance(debug_info, dict):
+            debug_info = {}
+        
+        # Ensure friendly_reasoning from the Job Scout is passed into the final response object
+        friendly_reasoning = extracted_params.get("friendly_reasoning")
+        # Always include friendly_reasoning in debug_info (even if None) so UI can access it
+        debug_info["friendly_reasoning"] = friendly_reasoning
+        if friendly_reasoning:
+            logger.info("friendly_reasoning_added_to_debug_info", friendly_reasoning=friendly_reasoning)
+        else:
+            logger.warning("friendly_reasoning_missing", detail="Job Scout did not return friendly_reasoning")
 
-        logger.info("chat_search_completed", summary_length=len(summary))
+        logger.info("chat_search_completed", summary_length=len(summary), persona_applied=persona_applied)
 
-        return {
-            "vacancies": vacancies_response,
-            "summary": summary,
-            "debug_info": debug_info
-        }
+        return ChatResponse(
+            vacancies=vacancies_response,
+            summary=summary,
+            debug_info=debug_info,
+            persona_applied=persona_applied  # Flag indicating if persona was successfully used
+        )
         
     except HTTPException:
         # Re-raise HTTP exceptions

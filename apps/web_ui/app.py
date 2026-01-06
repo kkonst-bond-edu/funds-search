@@ -466,47 +466,51 @@ def display_match_result(match: VacancyMatchResult, index: int):
     )
 
 
-def render_score_badges(pinecone_score: Optional[float], ai_match_score: Optional[int]) -> None:
+def render_score_badges(pinecone_score: Optional[float], score: Optional[float] = None, ai_match_score: Optional[int] = None) -> None:
     """
-    Render score badges (Pinecone and AI Match) as HTML using st.markdown.
+    Render score badges (Semantic Score and AI Match Score) as HTML using st.markdown.
     
     Args:
         pinecone_score: Pinecone similarity score (0.0 to 1.0) or None
-        ai_match_score: AI match score (0 to 10) or None
+        score: AI match score (0-100 scale) or None - primary score field
+        ai_match_score: AI match score (0-10 scale) or None - for backward compatibility
     """
-    if pinecone_score is None and ai_match_score is None:
+    if pinecone_score is None and score is None and ai_match_score is None:
         return
     
     score_badges = []
     
     if pinecone_score is not None:
-        # Format Pinecone score as percentage
+        # Format Pinecone score as percentage - renamed to "Semantic Score"
         pinecone_percent = pinecone_score * 100
         pinecone_badge = (
             f'<div style="background-color: #f0f9ff; padding: 0.5rem 0.75rem; border-radius: 0.5rem; '
             f'border: 1px solid #1f77b4;">'
-            f'<strong style="color: #1f77b4; font-size: 0.875rem;">Pinecone Search Score:</strong> '
+            f'<strong style="color: #1f77b4; font-size: 0.875rem;">Semantic Score:</strong> '
             f'<span style="font-weight: bold; font-size: 1.1rem; color: #1f77b4; margin-left: 0.5rem;">'
-            f'{pinecone_percent:.2f}%</span></div>'
+            f'{pinecone_percent:.1f}%</span></div>'
         )
         score_badges.append(pinecone_badge)
     
-    if ai_match_score is not None:
-        # Determine color based on AI match score
-        if ai_match_score >= 8:
+    # Use primary 'score' field (0-100) if available, otherwise fallback to ai_match_score (0-10)
+    ai_score_to_display = score if score is not None else (ai_match_score * 10 if ai_match_score is not None else None)
+    
+    if ai_score_to_display is not None:
+        # Determine color based on AI match score (0-100 scale)
+        if ai_score_to_display >= 80:
             score_color = "#22c55e"  # Green
-        elif ai_match_score >= 6:
+        elif ai_score_to_display >= 50:
             score_color = "#eab308"  # Yellow
         else:
             score_color = "#ef4444"  # Red
         
-        # Build AI match score badge with clean f-string
+        # Build AI match score badge
         ai_badge = (
             f'<div style="background-color: #f0f9ff; padding: 0.5rem 0.75rem; border-radius: 0.5rem; '
             f'border: 1px solid {score_color};">'
-            f'<strong style="color: {score_color}; font-size: 0.875rem;">AI Matcher Score:</strong> '
+            f'<strong style="color: {score_color}; font-size: 0.875rem;">AI Match Score:</strong> '
             f'<span style="font-weight: bold; font-size: 1.1rem; color: {score_color}; margin-left: 0.5rem;">'
-            f'{ai_match_score}/10</span></div>'
+            f'{int(ai_score_to_display)}%</span></div>'
         )
         score_badges.append(ai_badge)
     
@@ -524,7 +528,7 @@ def render_score_badges(pinecone_score: Optional[float], ai_match_score: Optiona
 
 def display_vacancy_card(vacancy: dict, index: int):
     """
-    Display a vacancy card in the chat interface.
+    Display a vacancy card in the chat interface with improved UX layout.
 
     Args:
         vacancy: Vacancy dictionary from API response
@@ -548,79 +552,133 @@ def display_vacancy_card(vacancy: dict, index: int):
     description_url = vacancy.get("description_url", "")
     required_skills = vacancy.get("required_skills", [])
     remote_option = vacancy.get("remote_option", False)
-    match_reasoning = vacancy.get("match_reasoning")  # AI match reasoning from MatchmakerAgent
+    match_reason = vacancy.get("match_reason")  # AI match reasoning from MatchmakerAgent (new field name)
+    match_reasoning = vacancy.get("match_reasoning") or match_reason  # Fallback to old field name for compatibility
+    ai_insight = vacancy.get("ai_insight") or match_reasoning or match_reason  # AI insight from MatchmakerAgent
     pinecone_score = vacancy.get("pinecone_score")  # Pinecone similarity score (0.0 to 1.0)
-    ai_match_score = vacancy.get("ai_match_score")  # AI match score (0 to 10)
+    ai_match_score = vacancy.get("ai_match_score")  # AI match score (0-10 scale, for backward compatibility)
+    score = vacancy.get("score")  # AI match score (0-100 scale) - primary score field
 
-    # Create card container with st.container for better layout control
-    with st.container():
-        # Card header with title and AI score
+    # Layout Structure: Use st.container(border=True) for each vacancy card
+    with st.container(border=True):
+        # Card header: Use st.columns([3, 1]) - left: Job Title + Company, right: AI Match Score
         col1, col2 = st.columns([3, 1])
         
         with col1:
             st.markdown(f"### 💼 {title}")
+            st.markdown(f"**{company_name}**")
         
         with col2:
-            # Display AI Match Score as metric (convert 0-10 to percentage)
-            if ai_match_score is not None:
-                # Convert 0-10 scale to 0-100 percentage
-                ai_score_percent = (ai_match_score / 10) * 100
-                st.metric("Match Score", f"{ai_score_percent:.0f}%")
+            # Display large, clean AI Match Score (remove duplicates - this is the only one)
+            current_score = score if score is not None else (ai_match_score * 10 if ai_match_score is not None else None)
+            # Check if persona is missing - show "Resume Required" badge
+            has_persona = st.session_state.get("persona") is not None
+            persona_applied = vacancy.get("persona_applied", False)
+            
+            if not has_persona or not persona_applied:
+                # Show greyed-out "Resume Required" badge when CV is missing
+                st.markdown(
+                    '<div style="text-align: center; padding: 1rem;">'
+                    '<div style="font-size: 1.25rem; font-weight: bold; color: #999; background-color: #f3f4f6; padding: 0.5rem; border-radius: 0.5rem;">Resume Required</div>'
+                    '<div style="font-size: 0.75rem; color: #999; margin-top: 0.25rem;">Upload CV to match</div>'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+            # Check if score is 0 but analysis exists and persona is present - show "Analyzing..." instead
+            elif current_score == 0 and ai_insight and has_persona:
+                st.markdown(
+                    '<div style="text-align: center; padding: 1rem;">'
+                    '<div style="font-size: 1.5rem; font-weight: bold; color: #666;">Analyzing...</div>'
+                    '<div style="font-size: 0.875rem; color: #999; margin-top: 0.25rem;">AI Match</div>'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+            elif current_score is not None:
+                # Determine color based on score
+                if current_score >= 80:
+                    score_color = "#22c55e"  # Green
+                elif current_score >= 50:
+                    score_color = "#eab308"  # Yellow
+                else:
+                    score_color = "#ef4444"  # Red
+                
+                st.markdown(
+                    f'<div style="text-align: center; padding: 1rem;">'
+                    f'<div style="font-size: 2.5rem; font-weight: bold; color: {score_color};">{int(current_score)}%</div>'
+                    f'<div style="font-size: 0.875rem; color: #666; margin-top: 0.25rem;">AI Match</div>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
             else:
-                st.caption("Score: N/A")
+                st.markdown(
+                    '<div style="text-align: center; padding: 1rem;">'
+                    '<div style="font-size: 1.25rem; color: #999;">N/A</div>'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
         
         st.markdown("---")
         
-        # Main details in a two-column layout
-        col1, col2 = st.columns(2)
+        # Metadata Clean-up: Display Location, Industry, and Company Stage as clean tags
+        metadata_tags = []
+        if location and location != "Not specified":
+            metadata_tags.append(f"📍 {location}")
+        if industry:
+            metadata_tags.append(f"🏢 {industry}")
+        if company_stage and company_stage != "Unknown":
+            metadata_tags.append(f"📈 {company_stage}")
+        if remote_option:
+            metadata_tags.append("🌐 Remote")
         
-        with col1:
-            st.markdown(f"**Industry:** {industry}")
-            st.markdown(f"**Location:** {location}")
-            st.markdown(f"**Company Stage:** {company_stage}")
+        if metadata_tags:
+            tags_html = " • ".join(metadata_tags)
+            st.markdown(f'<div style="margin-bottom: 1rem; color: #555; font-size: 0.9rem;">{tags_html}</div>', unsafe_allow_html=True)
         
-        with col2:
-            # Required Skills
-            if required_skills:
-                skills_str = ", ".join(required_skills)
-                st.markdown(f"**Required Skills:** {skills_str}")
-            else:
-                st.markdown("**Required Skills:** Not specified")
-            
-            # Salary Range
-            if salary_range:
-                st.markdown(f"**Salary Range:** {salary_range}")
-            else:
-                st.markdown("**Salary Range:** Not Specified")
-            
-            # Remote option
-            if remote_option:
-                st.markdown('<span style="background-color: #10b981; color: white; padding: 0.25rem 0.75rem; border-radius: 0.5rem; font-size: 0.875rem;">🌐 Remote Available</span>', unsafe_allow_html=True)
+        # Required Skills
+        if required_skills:
+            skills_str = ", ".join([f"`{skill}`" for skill in required_skills])
+            st.markdown(f"**Required Skills:** {skills_str}")
+        else:
+            st.markdown("**Required Skills:** Not specified")
+        
+        # Salary Range
+        if salary_range:
+            st.markdown(f"**Salary Range:** {salary_range}")
         
         # Description URL link
         if description_url:
             st.markdown(f"[→ View Full Details]({description_url})")
         
-        # Render scores using helper function
-        render_score_badges(pinecone_score, ai_match_score)
-        
-        # Add AI Match Reason if available
-        if match_reasoning:
-            # Escape HTML in reasoning text for safety, but preserve line breaks
-            import html
-            escaped_reasoning = html.escape(match_reasoning)
-            # Convert line breaks to <br> tags for proper rendering
-            escaped_reasoning = escaped_reasoning.replace('\n', '<br>')
-            
+        # AI Insights Positioning: Place '🤖 AI Analysis' in an expander to save vertical space
+        if ai_insight:
             st.markdown("---")
-            st.markdown("**🤖 AI Match Reason:**")
-            reasoning_html = (
-                f'<div style="margin-top: 0.5rem; padding: 0.75rem; '
-                f'background-color: #e7f3ff; border-radius: 0.5rem; border-left: 4px solid #1f77b4;">'
-                f'<div style="color: #333; line-height: 1.6;">{escaped_reasoning}</div>'
-                f'</div>'
+            # Wrap AI Analysis in expander - open by default if score > 70%
+            expander_default_open = current_score is not None and current_score > 70
+            with st.expander("🤖 Why is this a match?", expanded=expander_default_open):
+                # Use color coding based on score inside the expander
+                if current_score is not None:
+                    if current_score > 80:
+                        # High match - use success styling
+                        st.success(ai_insight)
+                    elif current_score < 50:
+                        # Low match - use warning styling
+                        st.warning(ai_insight)
+                    else:
+                        # Medium match - use info styling
+                        st.info(ai_insight)
+                else:
+                    # Default info styling if score is not available
+                    st.info(ai_insight)
+        
+        # Place Semantic Score at the very bottom in small, muted text (as a technical reference)
+        if pinecone_score is not None:
+            pinecone_percent = pinecone_score * 100
+            st.markdown(
+                f'<div style="margin-top: 1rem; padding-top: 0.5rem; border-top: 1px solid #e5e7eb; '
+                f'text-align: right; font-size: 0.75rem; color: #999;">'
+                f'Semantic Score: {pinecone_percent:.1f}%</div>',
+                unsafe_allow_html=True
             )
-            st.markdown(reasoning_html, unsafe_allow_html=True)
         
         st.markdown("")  # Add spacing between cards
 
@@ -708,7 +766,7 @@ if "persona" not in st.session_state:
     st.session_state.persona = None
 
 # Main UI
-st.title("🔍 AI Recruiter for a16z Portfolio Companies")
+st.title("A16Z Portfolio Talent Matcher")
 st.info("✅ Search Mode: Database (Verified)")
 
 # Sidebar - Clean: Only Configuration and Service Health
@@ -754,7 +812,7 @@ with st.sidebar:
 tab_chat, tab_search, tab_cv, tab_diagnostics = st.tabs([
     "💬 AI Recruiter",
     "🔍 Manual Search",
-    "📄 CV Analysis",
+    "📊 Career & Match Hub",
     "🛠️ Diagnostics"
 ])
 
@@ -779,13 +837,26 @@ with tab_chat:
                 vacancies = message["vacancies"]
                 debug_info = message.get("debug_info", {})
                 search_stats = message.get("search_stats", {})
+                persona_applied = message.get("persona_applied", False)
                 
-                # Display search mode badge
-                search_mode = debug_info.get("search_mode") if debug_info else None
-                if search_mode == "persona":
-                    st.info("👤 **Persona Mode**: Matching based on your CV profile.")
-                elif search_mode == "explicit":
-                    st.success("🔍 **Explicit Mode**: Searching strictly for your query.")
+                # Check if persona is missing and show warning
+                has_persona = st.session_state.get("persona") is not None
+                if not has_persona:
+                    st.warning("⚠️ **AI Matching is disabled.** Upload your CV to see how well you fit these roles.")
+                
+                # Display search mode badge at the top (prominent visual indicator)
+                # Check persona_applied flag from API response instead of search_mode
+                persona_actually_applied = message.get("persona_applied", False)
+                
+                if persona_actually_applied:
+                    st.success("👤 **Persona Mode**: Matching based on your CV profile.")
+                else:
+                    st.info("🌐 **Broad Search Mode**: General search without personalized matching.")
+                
+                # Display friendly_reasoning at the top as Strategy Box
+                friendly_reasoning = debug_info.get("friendly_reasoning") if debug_info else None
+                if friendly_reasoning:
+                    st.info(f"🛠️ **AI Search Strategy:** {friendly_reasoning}")
                 
                 # Display search statistics header
                 if search_stats:
@@ -801,9 +872,9 @@ with tab_chat:
                     
                     st.info(f"📊 {stats_text}")
                 
-                # Display debug info expander
+                # Display raw JSON in expander for debugging
                 if debug_info:
-                    with st.expander("🛠️ AI Agent Thought Process", expanded=False):
+                    with st.expander("🛠️ Technical Logs", expanded=False):
                         st.json(debug_info)
                 
                 # Show top 5 vacancies but indicate if more exist
@@ -833,6 +904,16 @@ with tab_chat:
                 chat_endpoint = f"{BACKEND_API_URL}/api/v1/vacancies/chat"
                 logger.info(f"Calling chat endpoint: {chat_endpoint}")
 
+                # Persona Check: Check if persona exists in session state
+                persona = st.session_state.get("persona")
+                # Only include persona if it's a valid non-empty dict
+                if persona and isinstance(persona, dict) and len(persona) > 0:
+                    persona_keys = list(persona.keys())
+                    logger.info(f"persona_found_in_session: has_persona=True, persona_keys={persona_keys}")
+                else:
+                    persona = None  # Ensure persona is None if invalid
+                    logger.warning("persona_not_found_in_session: No persona data available. CV may not have been analyzed yet.")
+
                 # Prepare request payload with history and persona
                 # Convert chat_messages to history format (exclude the current message we just added)
                 history = []
@@ -843,11 +924,29 @@ with tab_chat:
                             "content": msg.get("content", "")
                         })
 
-                request_payload = {
+                # API Request: Ensure persona is included in the request (or None if missing)
+                chat_data = {
                     "message": user_input,
-                    "history": history,
-                    "persona": st.session_state.get("persona")
+                    "persona": persona,  # Will be None if CV not uploaded
+                    "history": history
                 }
+                
+                # Debugging: Log persona data (hidden in expander for debugging)
+                with st.expander("🔍 Debug: Request Payload", expanded=False):
+                    debug_payload = {
+                        "message": user_input,
+                        "has_persona": persona is not None,
+                        "persona_keys": list(persona.keys()) if isinstance(persona, dict) else None,
+                        "persona_preview": {k: str(v)[:50] + "..." if len(str(v)) > 50 else v for k, v in list(persona.items())[:3]} if isinstance(persona, dict) else None,
+                        "history_length": len(history)
+                    }
+                    st.json(debug_payload)
+                    if persona:
+                        st.success("✅ Persona data is being sent to API")
+                    else:
+                        st.warning("⚠️ No persona data - CV may not have been analyzed. Upload your CV in the Career & Match Hub tab first.")
+
+                request_payload = chat_data
 
                 with httpx.Client(timeout=120.0) as client:
                     response = client.post(
@@ -861,6 +960,7 @@ with tab_chat:
                 vacancies = result.get("vacancies", [])
                 summary = result.get("summary", "Found matching vacancies.")
                 debug_info = result.get("debug_info", {})
+                persona_applied = result.get("persona_applied", False)
                 
                 # Extract search statistics if available (from VacancySearchResponse structure)
                 # Note: The chat endpoint may not return these directly, but we can construct from available data
@@ -925,7 +1025,8 @@ with tab_chat:
                 "content": summary if summary else "Found matching vacancies.",
                 "vacancies": vacancies,
                 "debug_info": debug_info if 'debug_info' in locals() else {},
-                "search_stats": search_stats if 'search_stats' in locals() else {}
+                "search_stats": search_stats if 'search_stats' in locals() else {},
+                "persona_applied": persona_applied if 'persona_applied' in locals() else False
             })
 
         st.rerun()
@@ -1091,7 +1192,7 @@ with tab_search:
 # TAB 3: CV ANALYSIS (Upload, Process, Match)
 # ============================================================================
 with tab_cv:
-    st.header("📄 CV Analysis")
+    st.header("📊 Career & Match Hub")
 
     # Radio button navigation for CV Analysis tools
     cv_mode = st.radio(

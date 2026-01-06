@@ -17,8 +17,16 @@ services:
       - CV_PROCESSOR_URL=http://cv-processor:8001
       - ACTIVE_AGENT=${ACTIVE_AGENT:-deepseek}
     depends_on:
-      - embedding-service
-      - cv-processor
+      embedding-service:
+        condition: service_healthy
+      cv-processor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     volumes:
       - .:/app
     networks:
@@ -36,6 +44,12 @@ services:
     volumes:
       - ./services:/app/services
       - ./shared:/app/shared
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     networks:
       - job-hunter-net
 
@@ -53,6 +67,12 @@ services:
       - EMBEDDING_SERVICE_URL=http://embedding-service:8001
     volumes:
       - .:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     networks:
       - job-hunter-net
 
@@ -66,6 +86,12 @@ services:
     volumes:
       - ./services:/app/services
       - ./shared:/app/shared
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     networks:
       - job-hunter-net
 
@@ -81,8 +107,16 @@ services:
       - BACKEND_API_URL=http://api:8000
       - CV_PROCESSOR_URL=http://cv-processor:8001
     depends_on:
-      - api
-      - cv-processor
+      api:
+        condition: service_healthy
+      cv-processor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8501/ || exit 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     volumes:
       - .:/app
     networks:
