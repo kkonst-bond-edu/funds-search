@@ -5,6 +5,75 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2025-01-XX
+
+### Added
+- **Matchmaker Agent**: Specialized AI agent for analyzing vacancy-candidate matches
+  - New `MatchmakerAgent` class that evaluates matches between candidate personas and vacancies
+  - Provides match scores (0-100) with detailed analysis
+  - Highlights connections (shared tech stack, experience) and gaps (missing skills, domain mismatches)
+  - Uses dedicated `matchmaker.txt` prompt for consistent match analysis
+  - Gracefully handles CV missing state with fallback responses
+  - JSON response parsing with robust error handling
+
+- **Short-term Memory (Conversation History)**: Context-aware chat search
+  - Chat search agent now maintains conversation history across messages
+  - `interpret_message()` accepts `history` parameter with previous messages
+  - Enables natural follow-up questions and context-aware search refinement
+  - History is passed to LLM for better understanding of user intent
+  - Supports both persona-based and explicit search modes with history context
+
+- **Improved Agent Architecture**: Standardized agent infrastructure
+  - New `BaseAgent` class providing unified interface for all AI agents
+  - Agent configuration loaded from `agents.yaml` (model, temperature, prompt file)
+  - Each agent initializes its own LLM provider with agent-specific settings
+  - Standardized logging with structlog for structured JSON logs
+  - Easy to add new agents by extending `BaseAgent` and adding config
+
+- **Hybrid Filtering & Persona Enrichment**: Enhanced search intelligence
+  - Persona enrichment: Role queries enriched with technical skills and experience from CV
+  - Hybrid mode: Combines user-provided skills with persona role when appropriate
+  - High-density search queries for better embedding matching
+  - Smart fallback: Explicit mode respects user's specific queries without persona interference
+  - Persona mode uses CV data as base, filling missing fields intelligently
+
+- **CV Missing State Handling**: Graceful degradation when CV not uploaded
+  - System performs broad search without personalized matching when persona is missing
+  - All vacancies include `persona_applied: false` and `match_score: 0` flags
+  - User guidance messages: "CV missing: Upload your resume in the 'Career & Match Hub' to enable AI matching"
+  - Web UI displays warning banners and "Resume Required" badges
+  - Matchmaker agent returns appropriate fallback responses when no persona available
+
+### Changed
+- **Agent System**: Refactored to use BaseAgent infrastructure
+  - `ChatSearchAgent` (Job Scout) now extends `BaseAgent`
+  - `MatchmakerAgent` extends `BaseAgent` for consistent behavior
+  - All agents load configuration from centralized `agents.yaml`
+  - Prompts stored in separate `.txt` files for easy editing
+
+- **Search Modes**: Enhanced persona vs explicit search logic
+  - Explicit mode: Uses ONLY user's current message, ignores persona and history
+  - Persona mode: Uses CV data as base, fills missing fields from persona
+  - Better detection of user intent (e.g., "for me" triggers persona mode)
+  - Improved validation and fallback logic for search mode selection
+
+### Improved
+- **Logging**: Structured JSON logging throughout agent system
+  - All agents use structlog for consistent log format
+  - Better debugging with agent-specific context in logs
+  - Logs include agent name, model, temperature, and operation details
+
+- **Error Handling**: More robust error handling in agents
+  - JSON parsing with markdown code block removal
+  - Graceful fallbacks when persona data is missing
+  - Better error messages for debugging
+
+### Technical Details
+- Agents are configured via `apps/orchestrator/settings/agents.yaml`
+- Each agent has its own prompt file in `apps/orchestrator/prompts/`
+- LLM providers are cached per agent configuration (model + temperature)
+- Conversation history format: `[{"role": "user/assistant", "content": "..."}]`
+
 ## [2.1.1] - 2025-01-03
 
 ### Added
