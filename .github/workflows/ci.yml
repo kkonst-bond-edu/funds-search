@@ -43,20 +43,19 @@ jobs:
         # Force uninstall any broken/cached langgraph versions
         pip uninstall -y langgraph || true
         
-        # Consolidate all requirements into one installation to avoid version conflicts
-        # First, explicitly install langgraph and core dependencies to ensure correct package structure
-        pip install --no-cache-dir langgraph>=0.1.0 langchain-openai langchain-core langchain-community
-        
-        # Install all requirements files in one go to ensure consistent versions
-        # Build list of requirements files that exist
-        REQ_FILES="-r requirements.txt"
-        [ -f "requirements/api.txt" ] && REQ_FILES="$REQ_FILES -r requirements/api.txt"
-        [ -f "apps/web_ui/requirements.txt" ] && REQ_FILES="$REQ_FILES -r apps/web_ui/requirements.txt"
-        [ -f "services/cv-processor/requirements.txt" ] && REQ_FILES="$REQ_FILES -r services/cv-processor/requirements.txt"
-        [ -f "services/embedding-service/requirements.txt" ] && REQ_FILES="$REQ_FILES -r services/embedding-service/requirements.txt"
-        [ -f "services/vc-worker/requirements.txt" ] && REQ_FILES="$REQ_FILES -r services/vc-worker/requirements.txt"
-        
-        pip install --no-cache-dir $REQ_FILES
+        # Single-step installation to prevent package structure corruption
+        # Install all dependencies in one command to ensure consistent package structure
+        pip install --no-cache-dir \
+          langgraph==0.2.2 \
+          langchain-openai \
+          langchain-core \
+          langchain-community \
+          -r requirements.txt \
+          -r requirements/api.txt \
+          -r apps/web_ui/requirements.txt \
+          -r services/cv-processor/requirements.txt \
+          -r services/embedding-service/requirements.txt \
+          -r services/vc-worker/requirements.txt
         
         # Verify langgraph is installed correctly
         python -c "import langgraph; print(f'✓ Langgraph installed: {langgraph.__file__}')"
@@ -86,14 +85,26 @@ jobs:
     
     - name: CI Debug - Find LangGraph
       run: |
-        echo "Checking for langgraph files:"
-        find . -name "langgraph*" -type f -o -name "langgraph*" -type d 2>/dev/null | grep -v ".git" | grep -v "__pycache__" | grep -v "site-packages" | grep -v ".venv" || echo "No langgraph files found"
+        echo "=== Aggressive search for langgraph conflicts (case-insensitive) ==="
+        find . -iname "langgraph*" -type f -o -iname "langgraph*" -type d 2>/dev/null | grep -v ".git" | grep -v "__pycache__" | grep -v "site-packages" | grep -v ".venv" || echo "No langgraph files found"
         echo ""
-        echo "Checking python path for langgraph:"
+        echo "=== Pip package information ==="
+        pip show langgraph || echo "langgraph not found via pip show"
+        echo ""
+        echo "=== All installed packages containing 'lang' ==="
+        pip list | grep -i lang || echo "No lang packages found"
+        echo ""
+        echo "=== Python path for langgraph ==="
         python -c "import langgraph; print(f'Langgraph location: {langgraph.__file__}')" || echo "Langgraph not found via import"
         echo ""
-        echo "Checking langgraph.graph import:"
+        echo "=== Testing langgraph.graph import ==="
         python -c "from langgraph.graph import StateGraph; print('✓ langgraph.graph import successful')" || echo "✗ langgraph.graph import failed"
+        echo ""
+        echo "=== Current PYTHONPATH ==="
+        echo "PYTHONPATH=$PYTHONPATH"
+        echo ""
+        echo "=== Python sys.path (first 10 entries) ==="
+        python -c "import sys; [print(f'{i}: {p}') for i, p in enumerate(sys.path[:10])]"
     
     - name: Run tests
       env:
@@ -104,7 +115,7 @@ jobs:
         PINECONE_INDEX: "mock-index"
         BACKEND_API_URL: "http://localhost:8000"
       run: |
-        pytest tests/ -v -p no:warnings --import-mode=importlib
+        pytest tests/ -v -p no:warnings --import-mode=append
     
     - name: Run API tests
       run: |
@@ -168,8 +179,8 @@ jobs:
     
     - name: Wait for service to start
       run: |
-        echo "Waiting 15 seconds for ${{ matrix.service.name }} to start (ML services need time to load models)..."
-        sleep 15
+        echo "Waiting 30 seconds for ${{ matrix.service.name }} to start (ML services like BGE-M3 need time to load models into CPU memory)..."
+        sleep 30
     
     - name: Check health endpoint for ${{ matrix.service.name }}
       run: |
