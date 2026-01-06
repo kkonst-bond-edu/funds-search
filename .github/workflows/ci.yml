@@ -36,6 +36,9 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        # Explicitly install langgraph and core dependencies first to avoid conflicts
+        pip install --no-cache-dir langgraph langchain-openai langchain-core langchain-community
+        
         # Install base and shared requirements
         pip install --no-cache-dir -r requirements.txt
         
@@ -48,29 +51,29 @@ jobs:
     
     - name: Import smoke check - API
       run: |
-        export PYTHONPATH=$PWD:$PYTHONPATH
+        export PYTHONPATH=$PWD
         python -c "import apps.api.main"
     
     - name: Import smoke check - CV Processor
       run: |
-        export PYTHONPATH=$PWD:$PYTHONPATH
+        export PYTHONPATH=$PWD
         # Use importlib to load module from file path (handles hyphen in directory name)
         python -c "import importlib.util; spec = importlib.util.spec_from_file_location('main', 'services/cv-processor/main.py'); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); print('✓ CV Processor imports successful')"
     
     - name: Import smoke check - Embedding Service
       run: |
-        export PYTHONPATH=$PWD:$PYTHONPATH
+        export PYTHONPATH=$PWD
         # Use importlib to load module from file path (handles hyphen in directory name)
         python -c "import importlib.util; spec = importlib.util.spec_from_file_location('main', 'services/embedding-service/main.py'); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); print('✓ Embedding Service imports successful')"
     
     - name: Import smoke check - Web UI
       run: |
-        export PYTHONPATH=$PWD:$PYTHONPATH
+        export PYTHONPATH=$PWD
         python -c "import apps.web_ui.app"
     
     - name: Import smoke check - VC Worker
       run: |
-        export PYTHONPATH=$PWD:$PYTHONPATH
+        export PYTHONPATH=$PWD
         # Use importlib to load module from file path (handles hyphen in directory name)
         python -c "import importlib.util; spec = importlib.util.spec_from_file_location('main', 'services/vc-worker/main.py'); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); print('✓ VC Worker imports successful')"
     
@@ -83,6 +86,7 @@ jobs:
         PINECONE_INDEX: "mock-index"
         BACKEND_API_URL: "http://localhost:8000"
       run: |
+        export PYTHONPATH=$PWD
         pytest tests/ -v
     
     - name: Run API tests
