@@ -36,18 +36,24 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # Explicitly install langgraph and core dependencies first to avoid conflicts
-        pip install --no-cache-dir langgraph langchain-openai langchain-core langchain-community
         
-        # Install base and shared requirements
-        pip install --no-cache-dir -r requirements.txt
+        # Consolidate all requirements into one installation to avoid version conflicts
+        # First, explicitly install langgraph and core dependencies to ensure correct package structure
+        pip install --no-cache-dir langgraph>=0.1.0 langchain-openai langchain-core langchain-community
         
-        # Install service-specific requirements
-        if [ -f "requirements/api.txt" ]; then pip install --no-cache-dir -r requirements/api.txt; fi
-        if [ -f "apps/web_ui/requirements.txt" ]; then pip install --no-cache-dir -r apps/web_ui/requirements.txt; fi
-        if [ -f "services/cv-processor/requirements.txt" ]; then pip install --no-cache-dir -r services/cv-processor/requirements.txt; fi
-        if [ -f "services/embedding-service/requirements.txt" ]; then pip install --no-cache-dir -r services/embedding-service/requirements.txt; fi
-        if [ -f "services/vc-worker/requirements.txt" ]; then pip install --no-cache-dir -r services/vc-worker/requirements.txt; fi
+        # Install all requirements files in one go to ensure consistent versions
+        # Build list of requirements files that exist
+        REQ_FILES="-r requirements.txt"
+        [ -f "requirements/api.txt" ] && REQ_FILES="$REQ_FILES -r requirements/api.txt"
+        [ -f "apps/web_ui/requirements.txt" ] && REQ_FILES="$REQ_FILES -r apps/web_ui/requirements.txt"
+        [ -f "services/cv-processor/requirements.txt" ] && REQ_FILES="$REQ_FILES -r services/cv-processor/requirements.txt"
+        [ -f "services/embedding-service/requirements.txt" ] && REQ_FILES="$REQ_FILES -r services/embedding-service/requirements.txt"
+        [ -f "services/vc-worker/requirements.txt" ] && REQ_FILES="$REQ_FILES -r services/vc-worker/requirements.txt"
+        
+        pip install --no-cache-dir $REQ_FILES
+        
+        # Verify langgraph is installed correctly
+        python -c "import langgraph; print(f'✓ Langgraph installed: {langgraph.__file__}')"
     
     - name: Import smoke check - API
       run: |
@@ -76,6 +82,18 @@ jobs:
         export PYTHONPATH=$PWD
         # Use importlib to load module from file path (handles hyphen in directory name)
         python -c "import importlib.util; spec = importlib.util.spec_from_file_location('main', 'services/vc-worker/main.py'); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); print('✓ VC Worker imports successful')"
+    
+    - name: CI Debug - Find LangGraph
+      run: |
+        echo "Checking for langgraph files:"
+        find . -name "langgraph*" -type f -o -name "langgraph*" -type d 2>/dev/null | grep -v ".git" | grep -v "__pycache__" | grep -v "site-packages" | grep -v ".venv" || echo "No langgraph files found"
+        echo ""
+        echo "Checking python path for langgraph:"
+        export PYTHONPATH=$PWD
+        python -c "import langgraph; print(f'Langgraph location: {langgraph.__file__}')" || echo "Langgraph not found via import"
+        echo ""
+        echo "Checking langgraph.graph import:"
+        python -c "from langgraph.graph import StateGraph; print('✓ langgraph.graph import successful')" || echo "✗ langgraph.graph import failed"
     
     - name: Run tests
       env:

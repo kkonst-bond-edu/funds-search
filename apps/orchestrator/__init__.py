@@ -1,5 +1,5 @@
 """Orchestrator module for LangGraph state machine."""
-from apps.orchestrator.graph import (
+from apps.orchestrator.workflow import (
     run_search,
     orchestrator,
     run_match,

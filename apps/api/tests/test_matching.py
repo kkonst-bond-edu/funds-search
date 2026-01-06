@@ -58,8 +58,8 @@ def mock_vacancy_results():
     ]
 
 
-@patch('apps.orchestrator.graph.get_pinecone_client')
-@patch('apps.orchestrator.graph.get_llm')
+@patch('apps.orchestrator.workflow.get_pinecone_client')
+@patch('apps.orchestrator.workflow.get_llm')
 def test_match_endpoint_success(
     mock_get_llm,
     mock_get_pinecone_client,
@@ -107,7 +107,7 @@ def test_match_endpoint_success(
     assert first_result["score"] == 0.85
 
 
-@patch('apps.orchestrator.graph.get_pinecone_client')
+@patch('apps.orchestrator.workflow.get_pinecone_client')
 def test_match_endpoint_candidate_not_found(mock_get_pinecone_client, client):
     """Test matching endpoint when candidate is not found."""
     # Setup mock to return None (candidate not found)
@@ -143,8 +143,8 @@ def test_match_endpoint_missing_candidate_id(client):
 
 def test_match_endpoint_default_top_k(client, mock_candidate_embedding, mock_vacancy_results):
     """Test matching endpoint with default top_k."""
-    with patch('apps.orchestrator.graph.get_pinecone_client') as mock_get_pc, \
-         patch('apps.orchestrator.graph.get_llm') as mock_get_llm:
+    with patch('apps.orchestrator.workflow.get_pinecone_client') as mock_get_pc, \
+         patch('apps.orchestrator.workflow.get_llm') as mock_get_llm:
 
         mock_pc_client = MagicMock()
         mock_pc_client.get_candidate_embedding.return_value = mock_candidate_embedding
