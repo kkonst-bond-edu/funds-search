@@ -83,30 +83,7 @@ jobs:
         # Use importlib to load module from file path (handles hyphen in directory name)
         python -c "import importlib.util; spec = importlib.util.spec_from_file_location('main', 'services/vc-worker/main.py'); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); print('✓ VC Worker imports successful')"
     
-    - name: CI Debug - Find LangGraph
-      run: |
-        echo "=== Aggressive search for langgraph conflicts (case-insensitive) ==="
-        find . -iname "langgraph*" -type f -o -iname "langgraph*" -type d 2>/dev/null | grep -v ".git" | grep -v "__pycache__" | grep -v "site-packages" | grep -v ".venv" || echo "No langgraph files found"
-        echo ""
-        echo "=== Pip package information ==="
-        pip show langgraph || echo "langgraph not found via pip show"
-        echo ""
-        echo "=== All installed packages containing 'lang' ==="
-        pip list | grep -i lang || echo "No lang packages found"
-        echo ""
-        echo "=== Python path for langgraph ==="
-        python -c "import langgraph; print(f'Langgraph location: {langgraph.__file__}')" || echo "Langgraph not found via import"
-        echo ""
-        echo "=== Testing langgraph.graph import ==="
-        python -c "from langgraph.graph import StateGraph; print('✓ langgraph.graph import successful')" || echo "✗ langgraph.graph import failed"
-        echo ""
-        echo "=== Current PYTHONPATH ==="
-        echo "PYTHONPATH=$PYTHONPATH"
-        echo ""
-        echo "=== Python sys.path (first 10 entries) ==="
-        python -c "import sys; [print(f'{i}: {p}') for i, p in enumerate(sys.path[:10])]"
-    
-    - name: Run tests
+    - name: Nuclear Cleanup and Test
       env:
         OPENAI_API_KEY: "mock-key"
         DEEPSEEK_API_KEY: "mock-key"
@@ -115,7 +92,20 @@ jobs:
         PINECONE_INDEX: "mock-index"
         BACKEND_API_URL: "http://localhost:8000"
       run: |
-        pytest tests/ -v -p no:warnings --import-mode=append
+        echo "--- 1. Searching for the imposter ---"
+        # This will find and DELETE any file or folder named langgraph that is NOT in site-packages
+        find . -name "langgraph*" -not -path "*site-packages*" -not -path "*/.*" -exec echo "Removing: {}" \; -exec rm -rf {} + || echo "No langgraph files found to remove"
+        
+        echo ""
+        echo "--- 2. Verifying clean state ---"
+        # This script will tell us EXACTLY what file Python thinks is 'langgraph'
+        python3 -c "import langgraph; print(f'Langgraph is coming from: {langgraph.__file__ if hasattr(langgraph, \"__file__\") else \"NAMESPACE/NONE\"}')" || echo "Langgraph not found via import"
+        
+        echo ""
+        echo "--- 3. Running tests with site-packages priority ---"
+        # We force site-packages to be at the very beginning of sys.path
+        export PYTHONPATH=".:${{ github.workspace }}"
+        python3 -m pytest tests/ -v --import-mode=importlib
     
     - name: Run API tests
       run: |
