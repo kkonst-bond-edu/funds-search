@@ -36,17 +36,11 @@ jobs:
       - name: Nuclear Cleanup and Unified Stack Installation
         run: |
           echo "--- 1. Absolute Purge of LangChain & LangGraph ---"
-          pip uninstall -y langgraph langgraph-checkpoint langgraph-sdk langgraph-prebuilt \
-                         langchain langchain-core langchain-community langchain-openai || true
-
+          pip uninstall -y langgraph langgraph-checkpoint langgraph-sdk langgraph-prebuilt langchain langchain-core langchain-community langchain-openai || true
+          
           echo "--- 2. Unified Stack Installation ---"
-          pip install --no-cache-dir \
-            langgraph==0.2.60 \
-            "langchain-core>=0.3.0" \
-            langchain-openai \
-            langchain-community \
-            langchain
-
+          pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0" langchain-openai langchain-community langchain
+          
           echo "--- 3. Verify Installation ---"
           python3 -c "import langgraph; import langchain_core; print(f'Langgraph version: {langgraph.__version__}'); print(f'Langchain-core version: {langchain_core.__version__}')"
     
