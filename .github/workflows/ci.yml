@@ -15,9 +15,9 @@ jobs:
     
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Free Disk Space
-      run: |
+        run: |
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /usr/local/share/powershell /usr/share/swift /usr/local/lib/node_modules
     
     - name: Set up Python ${{ matrix.python-version }}
@@ -27,25 +27,31 @@ jobs:
     
     - name: Cache pip packages
       uses: actions/cache@v3
-      with:
+        with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
         restore-keys: |
           ${{ runner.os }}-pip-
-    
-    - name: Install dependencies
-      run: |
+
+      - name: Install dependencies
+        run: |
         python -m pip install --upgrade pip
         
         echo "--- 1. Absolute Purge ---"
-        pip uninstall -y langgraph langgraph-checkpoint langgraph-sdk langgraph-prebuilt || true
+        # Purge all related packages to avoid ghosting and version conflicts
+        pip uninstall -y langgraph langgraph-checkpoint langgraph-sdk langgraph-prebuilt langchain langchain-core langchain-community langchain-openai || true
         
-        # Install core dependencies FIRST (langgraph installation moved to the end)
+        echo "--- 2. Unified Stack Installation ---"
+        # Install the unified stack in a single command so pip resolver can find compatible versions
         pip install --no-cache-dir \
+          langgraph==0.2.60 \
+          langchain-core>=0.3.0 \
           langchain-openai \
-          langchain-core \
           langchain-community \
-          -r requirements.txt
+          langchain
+        
+        # Install base requirements
+        pip install --no-cache-dir -r requirements.txt
         
         # Only install service-specific requirements if files exist
         [ -f requirements/api.txt ] && pip install --no-cache-dir -r requirements/api.txt || true
@@ -53,12 +59,11 @@ jobs:
         [ -f services/cv-processor/requirements.txt ] && pip install --no-cache-dir -r services/cv-processor/requirements.txt || true
         [ -f services/embedding-service/requirements.txt ] && pip install --no-cache-dir -r services/embedding-service/requirements.txt || true
         
-        echo "--- 2. Clean Installation ---"
-        # We only fix the main library version. Pip will automatically pull compatible langgraph-checkpoint (version 2.x)
-        pip install --no-cache-dir langgraph==0.2.60
-        
+        echo "--- 3. Verify Installation ---"
         # Verify langgraph is installed correctly
         python -c "import langgraph; print(f'✓ Langgraph installed: {langgraph.__file__}')"
+        # Verify versions to ensure compatibility
+        python -c "import langgraph; import langchain_core; print(f'✓ Langgraph version: {langgraph.__version__}'); print(f'✓ Langchain-core version: {langchain_core.__version__}')"
     
     - name: Import smoke check - API
       run: |
@@ -106,6 +111,10 @@ jobs:
         python3 -c "import langgraph; import importlib.util; spec = importlib.util.find_spec('langgraph'); print(f'Origin: {spec.origin}'); print(f'Submodule search paths: {spec.submodule_search_locations}')" || echo "Failed to get langgraph spec"
         pip show -f langgraph | head -n 20 || echo "Failed to show langgraph files"
         echo ""
+        echo "--- Version Verification ---"
+        # Verify versions of langgraph and langchain-core to ensure they are on compatible branches
+        python3 -c "import langgraph; import langchain_core; print(f'Langgraph version: {langgraph.__version__}'); print(f'Langchain-core version: {langchain_core.__version__}'); print(f'✓ Versions compatible: langgraph 0.2.x and langchain-core 0.3.x')" || echo "Failed to verify versions"
+        echo ""
         echo "--- Verify __init__.py exists ---"
         # Check if __init__.py actually exists in site-packages
         python3 -c "import site; import os; site_packages = site.getsitepackages(); langgraph_path = os.path.join(site_packages[0] if site_packages else '', 'langgraph'); init_file = os.path.join(langgraph_path, '__init__.py'); print(f'Checking: {init_file}'); print(f'Exists: {os.path.exists(init_file)}'); print(f'Is file: {os.path.isfile(init_file) if os.path.exists(init_file) else False}')" || echo "Failed to check __init__.py"
@@ -117,13 +126,13 @@ jobs:
         python3 -m pytest tests/ -v --import-mode=importlib
     
     - name: Run API tests
-      run: |
+        run: |
         if [ -d "apps/api/tests" ]; then
           pytest apps/api/tests/ -v --tb=short
         fi
-    
+
     - name: Run embedding service tests
-      run: |
+        run: |
         if [ -d "services/embedding-service/tests" ]; then
           pytest services/embedding-service/tests/ -v --tb=short
         fi
@@ -159,10 +168,10 @@ jobs:
     - uses: actions/checkout@v4
     
     - name: Free Disk Space
-      run: |
+        run: |
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /usr/local/share/powershell /usr/share/swift /usr/local/lib/node_modules
-    
-    - name: Set up Docker Buildx
+
+      - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
     
     - name: Build Docker image for ${{ matrix.service.name }}
@@ -241,7 +250,7 @@ jobs:
     
     - name: Set up Node.js
       uses: actions/setup-node@v4
-      with:
+        with:
         node-version: '18'
     
     - name: Install markdownlint-cli
@@ -249,7 +258,7 @@ jobs:
         npm install -g markdownlint-cli
     
     - name: Check markdown files
-      run: |
+        run: |
         markdownlint "**/*.md" --ignore node_modules --ignore .git || true
         # Note: Using || true to not fail the build on formatting issues
         # Remove || true if you want strict formatting enforcement
