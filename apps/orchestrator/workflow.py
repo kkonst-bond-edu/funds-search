@@ -3,6 +3,7 @@ LangGraph orchestrator for funds-search matching.
 Implements a state machine with Retrieval and Analysis nodes.
 """
 import logging
+import os
 import time
 import numpy as np
 from typing import TypedDict, List, Dict, Any, Optional

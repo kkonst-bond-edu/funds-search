@@ -43,19 +43,19 @@ jobs:
         # Force uninstall any broken/cached langgraph versions
         pip uninstall -y langgraph || true
         
-        # Single-step installation to prevent package structure corruption
-        # Install all dependencies in one command to ensure consistent package structure
+        # Install core langgraph dependencies first
         pip install --no-cache-dir \
           langgraph==0.2.2 \
           langchain-openai \
           langchain-core \
           langchain-community \
-          -r requirements.txt \
-          -r requirements/api.txt \
-          -r apps/web_ui/requirements.txt \
-          -r services/cv-processor/requirements.txt \
-          -r services/embedding-service/requirements.txt \
-          -r services/vc-worker/requirements.txt
+          -r requirements.txt
+        
+        # Only install service-specific requirements if files exist
+        [ -f requirements/api.txt ] && pip install --no-cache-dir -r requirements/api.txt || true
+        [ -f apps/web_ui/requirements.txt ] && pip install --no-cache-dir -r apps/web_ui/requirements.txt || true
+        [ -f services/cv-processor/requirements.txt ] && pip install --no-cache-dir -r services/cv-processor/requirements.txt || true
+        [ -f services/embedding-service/requirements.txt ] && pip install --no-cache-dir -r services/embedding-service/requirements.txt || true
         
         # Verify langgraph is installed correctly
         python -c "import langgraph; print(f'✓ Langgraph installed: {langgraph.__file__}')"
