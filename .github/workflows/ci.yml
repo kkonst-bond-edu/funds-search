@@ -37,7 +37,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         
-        # Total wipeout of ALL langgraph-related packages to avoid namespace conflicts
+        echo "--- 1. Absolute Purge ---"
         pip uninstall -y langgraph langgraph-checkpoint langgraph-sdk langgraph-prebuilt || true
         
         # Install core dependencies FIRST (langgraph installation moved to the end)
@@ -53,8 +53,9 @@ jobs:
         [ -f services/cv-processor/requirements.txt ] && pip install --no-cache-dir -r services/cv-processor/requirements.txt || true
         [ -f services/embedding-service/requirements.txt ] && pip install --no-cache-dir -r services/embedding-service/requirements.txt || true
         
-        # Install langgraph LAST to prevent other packages from pulling in wrong version
-        pip install --no-cache-dir langgraph==0.2.60 langgraph-checkpoint==1.0.12
+        echo "--- 2. Clean Installation ---"
+        # We only fix the main library version. Pip will automatically pull compatible langgraph-checkpoint (version 2.x)
+        pip install --no-cache-dir langgraph==0.2.60
         
         # Verify langgraph is installed correctly
         python -c "import langgraph; print(f'✓ Langgraph installed: {langgraph.__file__}')"
