@@ -33,37 +33,22 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-pip-
 
-      - name: Install dependencies
+      - name: Nuclear Cleanup and Unified Stack Installation
         run: |
-        python -m pip install --upgrade pip
-        
-        echo "--- 1. Absolute Purge ---"
-        # Purge all related packages to avoid ghosting and version conflicts
-        pip uninstall -y langgraph langgraph-checkpoint langgraph-sdk langgraph-prebuilt langchain langchain-core langchain-community langchain-openai || true
-        
-        echo "--- 2. Unified Stack Installation ---"
-        # Install the unified stack in a single command so pip resolver can find compatible versions
-        pip install --no-cache-dir \
-          langgraph==0.2.60 \
-          langchain-core>=0.3.0 \
-          langchain-openai \
-          langchain-community \
-          langchain
-        
-        # Install base requirements
-        pip install --no-cache-dir -r requirements.txt
-        
-        # Only install service-specific requirements if files exist
-        [ -f requirements/api.txt ] && pip install --no-cache-dir -r requirements/api.txt || true
-        [ -f apps/web_ui/requirements.txt ] && pip install --no-cache-dir -r apps/web_ui/requirements.txt || true
-        [ -f services/cv-processor/requirements.txt ] && pip install --no-cache-dir -r services/cv-processor/requirements.txt || true
-        [ -f services/embedding-service/requirements.txt ] && pip install --no-cache-dir -r services/embedding-service/requirements.txt || true
-        
-        echo "--- 3. Verify Installation ---"
-        # Verify langgraph is installed correctly
-        python -c "import langgraph; print(f'✓ Langgraph installed: {langgraph.__file__}')"
-        # Verify versions to ensure compatibility
-        python -c "import langgraph; import langchain_core; print(f'✓ Langgraph version: {langgraph.__version__}'); print(f'✓ Langchain-core version: {langchain_core.__version__}')"
+          echo "--- 1. Absolute Purge of LangChain & LangGraph ---"
+          pip uninstall -y langgraph langgraph-checkpoint langgraph-sdk langgraph-prebuilt \
+                         langchain langchain-core langchain-community langchain-openai || true
+
+          echo "--- 2. Unified Stack Installation ---"
+          pip install --no-cache-dir \
+            langgraph==0.2.60 \
+            "langchain-core>=0.3.0" \
+            langchain-openai \
+            langchain-community \
+            langchain
+
+          echo "--- 3. Verify Installation ---"
+          python3 -c "import langgraph; import langchain_core; print(f'Langgraph version: {langgraph.__version__}'); print(f'Langchain-core version: {langchain_core.__version__}')"
     
     - name: Import smoke check - API
       run: |
