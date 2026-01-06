@@ -95,7 +95,6 @@ jobs:
         pip list | grep -i lang || echo "No lang packages found"
         echo ""
         echo "=== Python path for langgraph ==="
-        pip show langgraph || echo "langgraph not found via pip show"
         python -c "import langgraph; print(f'Langgraph location: {langgraph.__file__}')" || echo "Langgraph not found via import"
         echo ""
         echo "=== Testing langgraph.graph import ==="
