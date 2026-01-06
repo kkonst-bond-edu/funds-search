@@ -18,7 +18,7 @@ jobs:
     
     - name: Free Disk Space
       run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /usr/local/share/powershell /usr/share/swift
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /usr/local/share/powershell /usr/share/swift /usr/local/lib/node_modules
     
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
@@ -75,8 +75,15 @@ jobs:
         python -c "import importlib.util; spec = importlib.util.spec_from_file_location('main', 'services/vc-worker/main.py'); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); print('✓ VC Worker imports successful')"
     
     - name: Run tests
+      env:
+        OPENAI_API_KEY: "mock-key"
+        DEEPSEEK_API_KEY: "mock-key"
+        PINECONE_API_KEY: "mock-key"
+        PINECONE_ENVIRONMENT: "us-east-1"
+        PINECONE_INDEX: "mock-index"
+        BACKEND_API_URL: "http://localhost:8000"
       run: |
-        pytest tests/ -v --tb=short
+        pytest tests/ -v
     
     - name: Run API tests
       run: |
@@ -122,7 +129,7 @@ jobs:
     
     - name: Free Disk Space
       run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /usr/local/share/powershell /usr/share/swift
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /usr/local/share/powershell /usr/share/swift /usr/local/lib/node_modules
     
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -188,6 +195,12 @@ jobs:
       run: |
         docker stop ${{ matrix.service.name }}-test || true
         docker rm -f ${{ matrix.service.name }}-test || true
+    
+    - name: Cleanup image
+      if: always()
+      run: |
+        docker rmi ${{ matrix.service.name }}:test || true
+        docker system prune -f || true
 
   docs-check:
     runs-on: ubuntu-latest
