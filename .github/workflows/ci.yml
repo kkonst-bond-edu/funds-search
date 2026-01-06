@@ -42,7 +42,7 @@ jobs:
           pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0" langchain-openai langchain-community langchain
           
           echo "--- 3. Verify Version Sync ---"
-          python3 -c "import langgraph; import langchain_core; print(f'✓ Langgraph: {langgraph.__version__}'); print(f'✓ Langchain-core: {langchain_core.__version__}')"
+          python3 -c "from importlib.metadata import version; print(f'✓ Langgraph: {version(\"langgraph\")}'); print(f'✓ Langchain-core: {version(\"langchain-core\")}')"
 
       - name: Import smoke checks
         run: |
