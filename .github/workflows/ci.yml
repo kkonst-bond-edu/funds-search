@@ -207,12 +207,17 @@ jobs:
     - name: Validate markdown syntax (basic check)
       run: |
         # Basic markdown validation: check for common issues
-        find . -name "*.md" -not -path "./node_modules/*" -not -path "./.git/*" | while read file; do
+        find . -name "*.md" -not -path "./node_modules/*" -not -path "./.git/*" -print0 | while IFS= read -r -d '' file; do
           echo "Checking $file..."
           # Check for unclosed code blocks
-          code_blocks=$(grep -c '```' "$file" || echo "0")
-          if [ $((code_blocks % 2)) -ne 0 ]; then
-            echo "Warning: $file may have unclosed code blocks"
+          code_blocks=$(grep -c '```' "$file" 2>/dev/null || true)
+          # Default to 0 if code_blocks is empty or not a number
+          code_blocks=${code_blocks:-0}
+          # Ensure it's a valid integer for arithmetic expansion
+          if [ "$code_blocks" -eq "$code_blocks" ] 2>/dev/null; then
+            if [ $((code_blocks % 2)) -ne 0 ]; then
+              echo "Warning: $file may have unclosed code blocks (found $code_blocks code block markers)"
+            fi
           fi
           # Check for basic structure (at least some content)
           if [ ! -s "$file" ]; then
