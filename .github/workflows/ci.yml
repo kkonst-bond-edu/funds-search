@@ -35,21 +35,19 @@ jobs:
 
       - name: Install Dependencies and Unified Stack
         run: |
-          echo "--- 1. Installing base requirements ---"
+          echo "--- 1. Installing base and dev requirements ---"
           pip install -r requirements.txt || echo "Root requirements.txt not found"
+          pip install pytest pytest-mock pytest-asyncio structlog
           
           echo "--- 2. Installing service and app requirements ---"
-          # Search in both services/ and apps/ directories
+          # Fix: added -r flag for each found requirements file
           find services/ apps/ -name "requirements.txt" -exec pip install -r {} + || true
           
-          echo "--- 3. Installing missing common utilities ---"
-          pip install structlog
-          
-          echo "--- 4. Purging and Force-syncing LangChain/LangGraph stack ---"
+          echo "--- 3. Purging and Force-syncing LangChain/LangGraph stack ---"
           pip uninstall -y langgraph langgraph-checkpoint langgraph-sdk langgraph-prebuilt langchain langchain-core langchain-community langchain-openai || true
           pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0" langchain-openai langchain-community langchain
           
-          echo "--- 5. Verify Version Sync ---"
+          echo "--- 4. Verify Version Sync ---"
           python3 -c "from importlib.metadata import version; print(f'✓ Langgraph: {version(\"langgraph\")}'); print(f'✓ Langchain-core: {version(\"langchain-core\")}')"
 
       - name: Import smoke checks
