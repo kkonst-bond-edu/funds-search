@@ -530,5 +530,17 @@
     ],
     "remote_option": true,
     "source_url": "https://jobs.a16z.com/jobs?remoteOnly=true"
+  },
+  {
+    "title": "Office Coordinator (Contract)",
+    "company_name": "Unknown Company",
+    "company_stage": "Growth (Series B or later)",
+    "location": "Not specified",
+    "industry": "Technology",
+    "salary_range": null,
+    "description_url": "https://job-boards.greenhouse.io/xai/jobs/5016003007",
+    "required_skills": [],
+    "remote_option": false,
+    "source_url": "https://jobs.a16z.com/jobs"
   }
 ]

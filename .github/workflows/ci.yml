@@ -18,28 +18,25 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Logic Stack
+      - name: Install Dependencies
         run: |
           uv pip install --system langgraph==0.2.60 langchain-core langchain-openai
           uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
-          uv pip install --system pytest pytest-mock pytest-asyncio fastapi uvicorn numpy python-dotenv pydantic
+          uv pip install --system pytest pytest-mock pytest-asyncio fastapi uvicorn numpy python-dotenv pydantic structlog
 
-      - name: Nuclear Purge of Shadows
-        run: |
-          # Physically remove any local folder named langgraph that isn't the real library
-          find . -name "langgraph" -type d -not -path "*site-packages*" -print -exec rm -rf {} +
-          find . -name "langgraph.py" -not -path "*site-packages*" -print -delete
-
-      - name: Run Pytest (Shielded)
+      - name: Run Pytest in Isolation
         env:
           OPENAI_API_KEY: "mock-key"
         run: |
-          # Get the real system path for site-packages
-          SITE_PKGS=$(python3 -c 'import site; print(site.getsitepackages()[0])')
-          # Force python to look at site-packages FIRST, then the repo
-          export PYTHONPATH="$SITE_PKGS:${{ github.workspace }}"
+          # 1. Сначала проверяем, где python видит langgraph ДО запуска pytest
+          python3 -c "import langgraph; print(f'--- DEBUG: Langgraph source: {langgraph.__file__}')"
           
-          echo "--- DEBUG: WHERE IS LANGGRAPH? ---"
-          python3 -c "import langgraph; print(f'REAL PATH: {langgraph.__file__}')"
-          
-          python3 -m pytest -v --import-mode=importlib --ignore=services/embedding-service
+          # 2. ТРЮК: Запускаем pytest, явно указывая, что текущая папка НЕ является пакетом
+          # Мы используем '-c /dev/null', чтобы игнорировать любые настройки в pyproject.toml, 
+          # которые могут ломать импорты
+          export PYTHONPATH="${{ github.workspace }}"
+          python3 -m pytest -v \
+            -c /dev/null \
+            --import-mode=importlib \
+            --ignore=services/embedding-service \
+            tests/ apps/api/tests/

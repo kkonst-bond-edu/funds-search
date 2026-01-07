@@ -134,28 +134,40 @@ async def main() -> None:
             existing_urls = get_existing_urls(existing_vacancies)
             logger.info(f"Found {len(existing_urls)} existing vacancy URLs")
             
-            # Run engine to get all vacancies
-            logger.info("Running scraper engine to fetch vacancies")
-            all_vacancies = await engine.run_all()
-            logger.info(f"Scraper engine completed: found {len(all_vacancies)} vacancies")
-            
-            # Process each NEW vacancy
+            # Process vacancies incrementally (save immediately after each extraction)
+            # This allows Ctrl+C to work and preserve already scraped data
             new_count = 0
             processed_count = 0
             skipped_count = 0
             
-            for vacancy in all_vacancies:
+            # Get all links first
+            logger.info("Fetching all job links")
+            all_links = await a16z_scraper.fetch_all_links()
+            logger.info(f"Found {len(all_links)} job links to process")
+            
+            # Process each link incrementally
+            for link in all_links:
                 # Check if this vacancy is already processed
-                if vacancy.description_url in existing_urls:
+                if link in existing_urls:
                     skipped_count += 1
-                    logger.info(f"Skipping already processed vacancy: {vacancy.description_url}")
+                    logger.info(f"Skipping already processed vacancy: {link}")
                     continue
                 
-                # This is a new vacancy
+                # Extract vacancy details
+                try:
+                    vacancy = await a16z_scraper.extract_details(link)
+                except Exception as e:
+                    logger.error(
+                        f"Failed to extract vacancy from {link}: {str(e)}",
+                        exc_info=True,
+                    )
+                    continue
+                
+                # This is a new vacancy - save IMMEDIATELY after extraction
                 new_count += 1
                 logger.info(f"Processing new vacancy: {vacancy.title} at {vacancy.company_name}")
                 
-                # Save to vacancies_dump.json
+                # Save to vacancies_dump.json IMMEDIATELY
                 try:
                     append_vacancy_to_dump(vacancy, dump_path)
                     # Update existing_urls to prevent duplicates in the same run
