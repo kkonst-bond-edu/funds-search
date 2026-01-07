@@ -143,10 +143,10 @@ graph LR
 
     %% Nodes
     START((Start)):::start
-    TS[👤 Talent Strategist<br/>(Extract Persona)]:::process
-    WH[🏹 Hunter Agent<br/>(Fetch & Scrape)]:::process
-    SV[🔍 Search Node<br/>(Vector Retrieval)]:::process
-    MM[🤝 Matchmaker<br/>(Rerank & Explain)]:::process
+    TS[👤 Talent Strategist<br/>Extract Persona]:::process
+    WH[🏹 Hunter Agent<br/>Fetch & Scrape]:::process
+    SV[🔍 Search Node<br/>Vector Retrieval]:::process
+    MM[🤝 Matchmaker<br/>Rerank & Explain]:::process
     END((End)):::endnode
 
     %% Flow
