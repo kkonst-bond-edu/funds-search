@@ -1,22 +1,15 @@
 # Funds Search — Conversational Multi-Agent Job Matching
 
-A microservice system that helps a candidate find and explain best-fit roles (VC / startup jobs) using:
-- **LangGraph** orchestration
-- **BGE-M3 embeddings**
-- **Pinecone** vector search
-- A small **agent fleet** (profiling → intent → matching → live scraping fallback)
+A microservice system that helps a candidate find and explain best-fit roles (VC / startup jobs) using **LangGraph** orchestration, **BGE-M3 embeddings**, and a specialized **agent fleet**.
 
-> Repo goal: keep the UI conversational and the backend deterministic/traceable (schemas + clear agent boundaries).
+> **Repo Goal**: Keep the UI conversational and the backend deterministic/traceable (schemas + clear agent boundaries).
 
----
-
-## 🎯 Why this APP?
-
+### Why this approach?
 Traditional job boards are keyword-based and overwhelming. This application acts as an **intelligent agentic layer** on top of vacancy data:
 1.  **Conversational**: Talk naturally ("I want a remote Python role in a Series A fintech") instead of fiddling with 20 filters.
-2.  **Context-Aware**: It doesn't just match keywords; it understands *intent* and matches your *persona* (CV) to the job requirements.
-3.  **Transparent**: Every match comes with an AI-generated explanation of *why* it fits you (and where gaps might be).
-4.  **Autonomous**: If it can't find matches in the database, it can dispatch a "Hunter Agent" to crawl live boards (e.g., Vacancies Boards) in real-time.
+2.  **Context-Aware**: It understands *intent* and matches your *persona* (CV) to the job requirements, not just keywords.
+3.  **Transparent**: Every match comes with an AI-generated explanation of *why* it fits you.
+4.  **Autonomous**: If matches are missing, it dispatches a "Hunter Agent" to crawl live boards in real-time.
 
 ---
 
@@ -127,82 +120,61 @@ graph TD
 
 ---
 
-## 🧠 Agent Logic & Workflow
+## 🤖 The Agent Fleet
 
-The system uses **LangGraph** to orchestrate specialized agents. Instead of one giant prompt, we split the cognitive load into distinct "Nodes" that pass state to each other.
+We avoid a single "all-knowing bot". Each agent is specialized, easier to debug, and uses the most appropriate model for its task.
 
-### Agent Workflow Diagram
+| Agent | Role | Model | Responsibility |
+|:------|:-----|:------|:---------------|
+| **Talent Strategist 🕵️‍♂️** | Profiler | **DeepSeek V3** | Parses CVs or interview answers to build a "Digital Twin" (UserPersona) with structured skills & preferences. |
+| **Job Scout 🛰️** | Intent Extractor | **DeepSeek R1** | Interprets vague chat messages ("like Google but in crypto") into structured filters and vector search queries. |
+| **Matchmaker 🤝** | Analyst (RAG) | **GPT-4o / Claude** | Reads candidate profiles vs. vacancies line-by-line. Assigns a relevance score and writes a "Why this fits" explanation. |
+| **Hunter Agent 🏹** | Scraper | **Firecrawl** | Wakes up if the local DB is empty or stale. Crawls external boards (e.g., Vacancies Boards) to fetch fresh data. |
+
+### Agent Workflow
 
 ```mermaid
 graph LR
     %% Styles
     classDef start fill:#bbf,stroke:#333,stroke-width:2px;
     classDef process fill:#fff,stroke:#333,stroke-width:1px;
-    classDef decision fill:#ff9,stroke:#333,stroke-width:1px;
+    classDef agent fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
     classDef endnode fill:#bbf,stroke:#333,stroke-width:2px;
 
     %% Nodes
-    START((Start)):::start
-    TS[👤 Talent Strategist<br/>Extract Persona]:::process
-    WH[🏹 Hunter Agent<br/>Fetch & Scrape]:::process
-    SV[🔍 Search Node<br/>Vector Retrieval]:::process
-    MM[🤝 Matchmaker<br/>Rerank & Explain]:::process
-    END((End)):::endnode
+    START((User Input)):::start
+    
+    subgraph "Phase 1: Understanding"
+        TS[👤 Talent Strategist<br/>CV Parsing]:::agent
+        JS[🛰️ Job Scout<br/>Intent Extraction]:::agent
+    end
+
+    subgraph "Phase 2: Discovery"
+        WH[🏹 Hunter Agent<br/>External Crawl]:::agent
+        SV[🔍 Search Node<br/>Vector Retrieval]:::process
+    end
+
+    subgraph "Phase 3: Analysis"
+        MM[🤝 Matchmaker<br/>Rerank & Explain]:::agent
+    end
+
+    END((Response)):::endnode
 
     %% Flow
-    START --> TS
-    TS --> WH
-    WH --> SV
-    SV --> MM
-    MM --> END
-
-    %% Explanations
-    subgraph "Logic Flow"
-    TS -.->|UserPersona| WH
-    WH -.->|Raw Jobs| SV
-    SV -.->|Top K Candidates| MM
-    MM -.->|Final Report| END
-    end
+    START -->|CV Upload| TS
+    START -->|Chat Message| JS
+    
+    TS -.->|UserPersona| JS
+    JS -->|Search Filters| SV
+    
+    SV --"No Results?"--> WH
+    WH -->|Fresh Jobs| SV
+    
+    SV -->|Top Candidates| MM
+    TS -.->|UserPersona| MM
+    MM -->|Ranked Matches| END
 ```
 
-### How Agents Work (Current Implementation)
-
-1.  **Talent Strategist (Node: `talent_strategist`)**:
-    *   **Role**: Profiler.
-    *   **Input**: User's CV or interview answers.
-    *   **Action**: Extracts structured data (Skills, Seniority, Preferences) to create a `UserPersona`.
-    *   **Output**: A "Digital Twin" of the candidate used for matching.
-
-2.  **Hunter Agent (Node: `web_hunter`)**:
-    *   **Role**: Discoverer.
-    *   **Input**: Search criteria or lack of local data.
-    *   **Action**: Connects to external sources (like Firecrawl) to scrape fresh vacancies if the local database is stale or empty.
-    *   **Output**: Raw vacancy text.
-
-3.  **Search Node (Node: `search_vacancies`)**:
-    *   **Role**: Retriever.
-    *   **Input**: `UserPersona` embedding + Filters.
-    *   **Action**: Converts the persona into a high-dimensional vector (BGE-M3) and queries Pinecone for the nearest neighbors (semantic match).
-    *   **Output**: Top 10-20 potential matches.
-
-4.  **Matchmaker (Node: `rerank_and_explain`)**:
-    *   **Role**: Analyst.
-    *   **Input**: Top matches + User Persona.
-    *   **Action**: Uses a powerful LLM (GPT-4o/Claude) to "read" each vacancy and compare it line-by-line with the persona. It assigns a *relevance score* and generates a *reasoning* paragraph.
-    *   **Output**: A ranked list of matches with "Why this fits you" explanations.
-
----
-
-## 📋 Agent Roles (The Agentic Fleet)
-
-We avoid a single "all-knowing bot". Each role is specialized, cheaper to run, and easier to debug.
-
-| Agent | Role | Model (Provider) | What it does |
-|------:|------|------------------|--------------|
-| **Talent Strategist 🕵️‍♂️** | Profiler | **DeepSeek V3** (cheap/fast) | Parses CV / interview answers → extracts skills & preferences → produces a **UserPersona JSON** |
-| **Job Scout 🛰️** | Intent Extractor | **DeepSeek R1** (reasoning) | Converts vague user intent ("like Google but in crypto") → **structured filters + vector query** |
-| **Matchmaker 🤝** | RAG Logic | **GPT-4o / Claude 3.5** | Takes top-K results → compares vs persona → explains why it's a strong match (score + reasoning) |
-| **Hunter Agent 🏹** | Real-time Scraper | **Firecrawl / APIs** | Wakes up if cache/DB is empty → fetches fresh jobs → returns items for indexing |
 
 
 ### CV Missing State
