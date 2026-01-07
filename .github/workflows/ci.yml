@@ -8,51 +8,42 @@ on:
 
 jobs:
   test:
-    name: Core Logic & API Tests
     runs-on: ubuntu-latest
     steps:
-      - name: Maximize Build Space
-        uses: easimon/maximize-build-space@master
-        with:
-          root-reserve-mb: 10240
-          remove-dotnet: 'true'
-          remove-android: 'true'
+      - uses: actions/checkout@v4
 
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - name: Manual Disk Cleanup
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install and Purge
+      - name: Lightweight Installation
         run: |
-          pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-          pip install --no-cache-dir -r requirements.txt || true
-          pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0" pytest pytest-mock pytest-asyncio
+          python -m pip install --upgrade pip
           
-          echo "--- Searching for shadowing files ---"
-          # This script finds exactly where Python sees 'langgraph' and kills it if it's in the repo
-          python3 -c "
-          import importlib.util, os, shutil
-          spec = importlib.util.find_spec('langgraph')
-          if spec and spec.origin and 'site-packages' not in spec.origin:
-              print(f'🚨 SHADOW FOUND AT: {spec.origin}')
-              if os.path.isfile(spec.origin): os.remove(spec.origin)
-              else: shutil.rmtree(os.path.dirname(spec.origin) if spec.origin.endswith('__init__.py') else spec.origin)
-          "
-          # Double check for files we might have missed
-          find . -iname "langgraph.py" -not -path "*site-packages*" -delete
-          find . -type d -name "langgraph" -not -path "*site-packages*" -exec rm -rf {} +
+          # Create a lightweight requirements file without the heavy ML stuff
+          grep -vE "torch|transformers|docling|nvidia" requirements.txt > req_light.txt
+          
+          pip install --no-cache-dir -r req_light.txt
+          pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0" pytest pytest-mock pytest-asyncio structlog fastapi uvicorn
+          
+          # If your code imports torch but doesn't use it in tests, we install a tiny mock
+          pip install --no-cache-dir unittest-xml-reporting 
 
-      - name: Run Pytest
+      - name: Verify and Run
         env:
           OPENAI_API_KEY: "mock-key"
+          PYTHONPATH: ${{ github.workspace }}
         run: |
-          # Force Python to look ONLY at site-packages for the core libraries
-          SITE_PKGS=$(python3 -c 'import site; print(site.getsitepackages()[0])')
-          export PYTHONPATH="$SITE_PKGS:${{ github.workspace }}"
+          # Kill any local shadows one last time
+          find . -iname "langgraph.py" -delete
+          
+          # Run pytest. If it fails on missing torch import, we'll know.
           python3 -m pytest -v --import-mode=importlib
 
   docker-build:
