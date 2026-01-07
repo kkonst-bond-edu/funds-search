@@ -22,7 +22,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Create venv
-        run: uv venv .venv
+        run: uv venv .venv --seed
 
       - name: Install dependencies (venv)
         run: |
