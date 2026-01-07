@@ -11,8 +11,6 @@ jobs:
     name: Core Logic & API Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
       - name: Maximize Build Space
         uses: easimon/maximize-build-space@master
         with:
@@ -23,6 +21,8 @@ jobs:
           remove-haskell: 'true'
           remove-codeql: 'true'
           remove-docker-images: 'true'
+
+      - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
