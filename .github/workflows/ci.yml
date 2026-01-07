@@ -15,53 +15,44 @@ jobs:
         uses: easimon/maximize-build-space@master
         with:
           root-reserve-mb: 10240
-          temp-reserve-mb: 1024
           remove-dotnet: 'true'
           remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
-          remove-docker-images: 'true'
 
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Optimized Installation
+      - name: Install and Purge
         run: |
-          python -m pip install --upgrade pip
-          # 1. Install lightweight CPU torch first
           pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-          # 2. Install core requirements
           pip install --no-cache-dir -r requirements.txt || true
-          pip install --no-cache-dir pytest pytest-mock pytest-asyncio structlog fastapi uvicorn
+          pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0" pytest pytest-mock pytest-asyncio
           
-          # 3. Synchronized LangGraph Stack (The fixed versions)
-          pip uninstall -y langgraph langgraph-checkpoint langgraph-sdk langgraph-prebuilt langchain langchain-core langchain-community langchain-openai || true
-          pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0" langchain-openai langchain-community langchain
+          echo "--- Searching for shadowing files ---"
+          # This script finds exactly where Python sees 'langgraph' and kills it if it's in the repo
+          python3 -c "
+          import importlib.util, os, shutil
+          spec = importlib.util.find_spec('langgraph')
+          if spec and spec.origin and 'site-packages' not in spec.origin:
+              print(f'🚨 SHADOW FOUND AT: {spec.origin}')
+              if os.path.isfile(spec.origin): os.remove(spec.origin)
+              else: shutil.rmtree(os.path.dirname(spec.origin) if spec.origin.endswith('__init__.py') else spec.origin)
+          "
+          # Double check for files we might have missed
+          find . -iname "langgraph.py" -not -path "*site-packages*" -delete
+          find . -type d -name "langgraph" -not -path "*site-packages*" -exec rm -rf {} +
 
-      - name: Environment Sanity Check
-        run: |
-          export PYTHONPATH="${{ github.workspace }}"
-          python3 -c "import langgraph.graph; print(f'✓ Langgraph is package at: {langgraph.__file__}')"
-
-      - name: Run Pytest (Ultra Isolation)
+      - name: Run Pytest
         env:
           OPENAI_API_KEY: "mock-key"
-          DEEPSEEK_API_KEY: "mock-key"
-          PINECONE_API_KEY: "mock-key"
-          BACKEND_API_URL: "http://localhost:8000"
         run: |
-          echo "--- 1. Project Structure Check ---"
-          ls -F
-          
-          echo "--- 2. Running Pytest ---"
+          # Force Python to look ONLY at site-packages for the core libraries
           SITE_PKGS=$(python3 -c 'import site; print(site.getsitepackages()[0])')
           export PYTHONPATH="$SITE_PKGS:${{ github.workspace }}"
-          
-          # We remove 'tests/' and let pytest discover tests automatically
           python3 -m pytest -v --import-mode=importlib
 
   docker-build:
