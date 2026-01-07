@@ -28,38 +28,34 @@ jobs:
         run: |
           "$VENV_PY" -V
           "$VENV_PY" -m pip -V
+          "$VENV_PY" -m pip install -U pip
 
-          # Make sure langgraph is clean + exact version
-          "$VENV_PY" -m pip uninstall -y langgraph || true
+          # hard reinstall to avoid any weird preinstalled shadowing
           uv pip install --python "$VENV_PY" --no-cache-dir --force-reinstall "langgraph==0.2.60"
 
-          # Other deps
-          uv pip install --python "$VENV_PY" --no-cache-dir "langchain-core" "langchain-openai"
-          uv pip install --python "$VENV_PY" --no-cache-dir "torch" --index-url https://download.pytorch.org/whl/cpu
-          uv pip install --python "$VENV_PY" --no-cache-dir pytest pytest-mock pytest-asyncio fastapi uvicorn numpy python-dotenv pydantic structlog
+          uv pip install --python "$VENV_PY" --no-cache-dir \
+            langchain-core langchain-openai \
+            pytest pytest-mock pytest-asyncio \
+            fastapi uvicorn numpy python-dotenv pydantic structlog
 
-      - name: Create minimal pytest config (ignore pyproject.toml)
-        run: |
-          printf "[pytest]\n" > ci_pytest.ini
+          uv pip install --python "$VENV_PY" --no-cache-dir \
+            torch --index-url https://download.pytorch.org/whl/cpu
 
-      - name: Add repo root into site-packages via .pth (no PYTHONPATH)
-        run: |
-          "$VENV_PY" -c "import site, pathlib; sp=site.getsitepackages()[0]; pth=pathlib.Path(sp)/'funds_search_repo.pth'; pth.write_text(str(pathlib.Path.cwd().resolve())+'\n'); print('Wrote:', pth); print('Repo root:', pathlib.Path.cwd().resolve()); print('Site-packages:', sp)"
+      - name: Create minimal pytest config
+        run: printf "[pytest]\n" > ci_pytest.ini
 
-      - name: Sanity check: show langgraph resolution
+      - name: Sanity check - langgraph import
         run: |
-          "$VENV_PY" -c "import importlib.util, sys, pathlib; print('EXE:', sys.executable); print('CWD:', pathlib.Path().resolve()); spec=importlib.util.find_spec('langgraph'); print('langgraph spec:', spec); print('origin:', getattr(spec,'origin',None)); print('locations:', getattr(spec,'submodule_search_locations',None))"
-          "$VENV_PY" -c "import langgraph; print('langgraph.__file__:', getattr(langgraph,'__file__',None)); print('is_pkg:', hasattr(langgraph,'__path__'))"
+          "$VENV_PY" -c "import importlib.util, sys, pathlib; print('EXE:', sys.executable); print('CWD:', pathlib.Path().resolve()); spec = importlib.util.find_spec('langgraph'); print('langgraph spec:', spec); print('origin:', getattr(spec, 'origin', None) if spec else None); print('locations:', getattr(spec, 'submodule_search_locations', None) if spec else None)"
+          "$VENV_PY" -c "import langgraph; print('langgraph.__file__:', getattr(langgraph, '__file__', None)); print('is_pkg:', hasattr(langgraph, '__path__'))"
           "$VENV_PY" -c "from langgraph.graph import StateGraph, END; print('OK: langgraph.graph import works')"
 
-      - name: Run tests (from /tmp to avoid cwd shadowing)
+      - name: Run tests
         env:
           OPENAI_API_KEY: "mock-key"
         run: |
-          cd /tmp
           "$VENV_PY" -m pytest -v \
-            -c "$GITHUB_WORKSPACE/ci_pytest.ini" \
+            -c ci_pytest.ini \
             --import-mode=importlib \
-            --ignore "$GITHUB_WORKSPACE/services/embedding-service" \
-            "$GITHUB_WORKSPACE/tests" \
-            "$GITHUB_WORKSPACE/apps/api/tests"
+            --ignore services/embedding-service \
+            tests apps/api/tests
