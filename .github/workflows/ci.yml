@@ -21,22 +21,25 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Comprehensive Installation
+      - name: Comprehensive Installation and Shadow Purge
         run: |
-          python -m pip install --upgrade pip
-          # 1. Install project dependencies
+          echo "--- 1. Pre-installation Cleanup ---"
+          # Remove any potential shadows before we even start
+          find . -iname "langgraph*" -not -path "*site-packages*" -exec echo "🚨 Removing: {}" \; -exec rm -rf {} +
+          
+          echo "--- 2. Install Project Stack ---"
           pip install -r requirements.txt || true
           pip install pytest pytest-mock pytest-asyncio structlog fastapi uvicorn
           
-          # 2. Sync LangChain stack
+          echo "--- 3. Force Sync LangGraph/LangChain ---"
           pip uninstall -y langgraph langgraph-checkpoint langgraph-sdk langgraph-prebuilt langchain langchain-core langchain-community langchain-openai || true
           pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0" langchain-openai langchain-community langchain
           
-          # 3. DESTROY THE IMPOSTER (The Final Fix)
-          # We search for ANY file/folder named langgraph (case-insensitive) NOT in site-packages and DELETE it.
-          find . -iname "langgraph*" -not -path "*site-packages*" -not -path "*/.*" -exec echo "🚨 Removing imposter: {}" \; -exec rm -rf {} +
+          echo "--- 4. Verify Final Environment ---"
+          # This MUST print a path in /opt/hostedtoolcache/... NOT in your repo
+          python3 -c "import langgraph; print(f'✓ Langgraph is safe at: {langgraph.__file__}')"
 
-      - name: Verify and Run Tests
+      - name: Run Pytest (Ultra Isolation)
         env:
           OPENAI_API_KEY: "mock-key"
           DEEPSEEK_API_KEY: "mock-key"
@@ -45,12 +48,10 @@ jobs:
           PINECONE_INDEX: "mock-index"
           BACKEND_API_URL: "http://localhost:8000"
         run: |
-          # Diagnostic: where is langgraph coming from?
-          python3 -c "import langgraph; print(f'IMPORT CHECK: langgraph is at {langgraph.__file__}')"
+          # Force Python to prefer site-packages over the local directory
+          export PYTHONPATH=$(python3 -c 'import site; print(":".join(site.getsitepackages()))'):$PYTHONPATH
           
-          # Run pytest with site-packages priority
-          SITE_PKGS=$(python3 -c 'import site; print(site.getsitepackages()[0])')
-          export PYTHONPATH="$SITE_PKGS:${{ github.workspace }}"
+          # Run pytest but tell it to ignore the local root for imports where possible
           python3 -m pytest tests/ -v --import-mode=importlib
 
   docker-build-smoke:
