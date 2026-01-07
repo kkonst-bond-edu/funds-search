@@ -11,7 +11,6 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python
-        id: py
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
@@ -19,45 +18,82 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      - name: Create venv (same Python as setup-python)
+      - name: Create venv
         run: |
-          uv venv --python "${{ steps.py.outputs.python-path }}" .venv
-          source .venv/bin/activate
+          uv venv .venv
+          . .venv/bin/activate
           python -V
           which python
 
-      - name: Install Dependencies (into venv)
+      - name: Install dependencies (venv)
         run: |
-          source .venv/bin/activate
+          . .venv/bin/activate
 
-          # ставим всё в ОДНОМ окружении (не --system)
-          uv pip install \
-            "langgraph==0.2.60" \
-            "langchain-core" \
-            "langchain-openai"
+          # Core deps
+          uv pip install langgraph==0.2.60 langchain-core langchain-openai
 
-          uv pip install \
-            "torch" --index-url https://download.pytorch.org/whl/cpu
+          # CPU torch
+          uv pip install torch --index-url https://download.pytorch.org/whl/cpu
 
-          uv pip install \
-            "pytest" "pytest-mock" "pytest-asyncio" \
-            "fastapi" "uvicorn" "numpy" "python-dotenv" "pydantic" "structlog"
+          # Test/runtime deps used in repo
+          uv pip install pytest pytest-mock pytest-asyncio fastapi uvicorn numpy python-dotenv pydantic structlog
 
-          # ЖЕСТКИЙ sanity-check именно того импорта, который падает у тебя
-          python -c "import importlib.util; s=importlib.util.find_spec('langgraph'); print('langgraph spec:', s); import langgraph; print('langgraph __file__:', getattr(langgraph,'__file__',None)); print('langgraph __path__:', getattr(langgraph,'__path__',None))"
+      - name: Create minimal pytest config (ignore pyproject.toml)
+        run: |
+          cat > ci_pytest.ini <<'INI'
+          [pytest]
+          INI
+
+      - name: Add repo root into site-packages via .pth (no PYTHONPATH)
+        run: |
+          . .venv/bin/activate
+          python - <<'PY'
+          import site, pathlib
+          sp = site.getsitepackages()[0]
+          pth = pathlib.Path(sp) / "funds_search_repo.pth"
+          pth.write_text(str(pathlib.Path.cwd().resolve()) + "\n")
+          print("Wrote:", pth)
+          print("Repo root:", pathlib.Path.cwd().resolve())
+          print("Site-packages:", sp)
+          PY
+
+      - name: Sanity check: prove which langgraph is imported
+        run: |
+          . .venv/bin/activate
+          python - <<'PY'
+          import sys, importlib.util, pathlib
+          print("PYTHON:", sys.version)
+          print("EXE:", sys.executable)
+          print("CWD:", pathlib.Path().resolve())
+          print("sys.path[0]:", sys.path[0])
+
+          spec = importlib.util.find_spec("langgraph")
+          print("langgraph spec:", spec)
+          if spec:
+            print("langgraph origin:", spec.origin)
+            print("langgraph submodule_search_locations:", spec.submodule_search_locations)
+
+          # If something in repo shadows, покажем это явно
+          root = pathlib.Path.cwd()
+          hits = []
+          hits += list(root.rglob("langgraph.py"))
+          hits += list(root.rglob("langgraph.pyc"))
+          hits += list(root.rglob("langgraph/__init__.py"))
+          print("repo shadow hits:", [str(p) for p in hits[:100]])
+          PY
+
           python -c "from langgraph.graph import StateGraph, END; print('OK: langgraph.graph import works')"
 
-      - name: Run Pytest
+      - name: Run tests (from /tmp to avoid cwd shadowing)
         env:
           OPENAI_API_KEY: "mock-key"
         run: |
-          source .venv/bin/activate
+          . .venv/bin/activate
+          cd /tmp
 
-          # важно: держим rootdir в workspace, иначе pytest лезет в /dev
           python -m pytest -v \
-            --rootdir="${GITHUB_WORKSPACE}" \
-            --basetemp="${GITHUB_WORKSPACE}/.pytest_tmp" \
-            -c /dev/null \
+            -c "$GITHUB_WORKSPACE/ci_pytest.ini" \
             --import-mode=importlib \
-            --ignore=services/embedding-service \
-            tests/ apps/api/tests/
+            --ignore "$GITHUB_WORKSPACE/services/embedding-service" \
+            "$GITHUB_WORKSPACE/tests" \
+            "$GITHUB_WORKSPACE/apps/api/tests"
