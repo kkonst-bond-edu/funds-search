@@ -55,3 +55,8 @@ temp_*.pdf
 
 # Docling cache
 .docling_cache/
+
+# Scraper storage (keep .gitkeep files)
+storage/raw_scrapes/
+!storage/raw_scrapes/.gitkeep
+!storage/.gitkeep
