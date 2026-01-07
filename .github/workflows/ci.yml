@@ -60,27 +60,19 @@ jobs:
       - name: Sanity check: prove which langgraph is imported
         run: |
           . .venv/bin/activate
-          python - <<'PY'
-          import sys, importlib.util, pathlib
-          print("PYTHON:", sys.version)
-          print("EXE:", sys.executable)
-          print("CWD:", pathlib.Path().resolve())
-          print("sys.path[0]:", sys.path[0])
 
-          spec = importlib.util.find_spec("langgraph")
-          print("langgraph spec:", spec)
-          if spec:
-            print("langgraph origin:", spec.origin)
-            print("langgraph submodule_search_locations:", spec.submodule_search_locations)
-
-          # If something in repo shadows, покажем это явно
-          root = pathlib.Path.cwd()
-          hits = []
-          hits += list(root.rglob("langgraph.py"))
-          hits += list(root.rglob("langgraph.pyc"))
-          hits += list(root.rglob("langgraph/__init__.py"))
-          print("repo shadow hits:", [str(p) for p in hits[:100]])
-          PY
+          python -c "import sys,importlib.util,pathlib; \
+          print('PYTHON:',sys.version); \
+          print('EXE:',sys.executable); \
+          print('CWD:',pathlib.Path().resolve()); \
+          print('sys.path[0]:',sys.path[0]); \
+          spec=importlib.util.find_spec('langgraph'); \
+          print('langgraph spec:',spec); \
+          print('langgraph origin:', getattr(spec,'origin',None)); \
+          print('langgraph submodule_search_locations:', getattr(spec,'submodule_search_locations',None)); \
+          root=pathlib.Path.cwd(); \
+          hits=list(root.rglob('langgraph.py'))+list(root.rglob('langgraph.pyc'))+list(root.rglob('langgraph/__init__.py')); \
+          print('repo shadow hits:', [str(p) for p in hits[:100]])"
 
           python -c "from langgraph.graph import StateGraph, END; print('OK: langgraph.graph import works')"
 
