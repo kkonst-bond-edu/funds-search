@@ -5,13 +5,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - name: Maximize Space
+      - name: Maximize Space (The Only Way)
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 15360
+          root-reserve-mb: 18000 # Оставляем 18ГБ под систему, остальное под код
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
+          remove-docker-images: 'true'
 
       - uses: actions/checkout@v4
 
@@ -20,41 +21,32 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Extreme Cleanup & Install
+      - name: Isolated Installation
         run: |
-          # 1. Strip heavy ML from requirements to guarantee disk space
-          grep -vE "torch|transformers|docling|nvidia|triton" requirements.txt > req_light.txt
+          python -m pip install --upgrade pip
           
-          # 2. Install core stack
-          pip install --no-cache-dir -r req_light.txt
-          pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0" pytest pytest-mock pytest-asyncio structlog fastapi uvicorn
+          # 1. СНАЧАЛА ставим только критический стек LangGraph без кэша
+          pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0" langchain-openai langchain-community
           
-          # 3. MOCK TORCH (The Space Saver)
-          # This prevents ModuleNotFoundError in embedding tests without installing 2GB of data
-          mkdir -p mock_libs
-          echo "class Mock: pass" > mock_libs/torch.py
-          echo "import sys; sys.modules['torch'] = Mock()" >> mock_libs/torch.py
+          # 2. Проверяем импорт СРАЗУ (если упадет тут - значит диск или библиотека битая)
+          python3 -c "import langgraph.graph; print('✅ Langgraph installed successfully')"
           
-          # 4. KILL ALL LOCAL LANGGRAPH SHADOWS
-          # Search everywhere for any file/folder named langgraph and destroy it
-          python3 -c "
-          import os, shutil
-          for root, dirs, files in os.walk('.'):
-              for name in dirs + files:
-                  if 'langgraph' in name.lower() and 'site-packages' not in root:
-                      path = os.path.join(root, name)
-                      print(f'🚨 Killing shadow: {path}')
-                      if os.path.isdir(path): shutil.rmtree(path)
-                      else: os.remove(path)
-          "
+          # 3. Ставим остальные зависимости по одной, чтобы видеть где кончится место
+          pip install --no-cache-dir pytest pytest-mock pytest-asyncio structlog fastapi uvicorn
+          
+          # 4. Ставим ТЯЖЕЛЫЙ блок (Torch) в самом конце и только CPU версию
+          pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu || echo "Torch failed, but we continue"
 
-      - name: Run Pytest (The Final Victory)
+      - name: Debug and Run
         env:
+          PYTHONPATH: ${{ github.workspace }}
           OPENAI_API_KEY: "mock-key"
-          PYTHONPATH: ".:./mock_libs"
         run: |
-          # Verify that langgraph is now a real package from site-packages
-          python3 -c 'import langgraph.graph; print(f"✓ Success: {langgraph.__file__}")'
+          echo "--- sys.path inside pytest ---"
+          # Создаем временный скрипт отладки
+          echo "import sys; import langgraph; print(f'Langgraph path: {langgraph.__file__}'); print(f'Path: {sys.path}')" > debug_path.py
+          python3 debug_path.py
           
-          # Run pytest with import-mode isolation
-          python3 -m pytest -v --import-mode=importlib
+          # Запускаем pytest с ПОЛНОЙ изоляцией
+          # -p no:cacheprovider убирает создание лишних папок .pytest_cache
+          python3 -m pytest -v --import-mode=importlib -p no:cacheprovider
