@@ -16,7 +16,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Install Dependencies
         run: |
@@ -24,18 +24,37 @@ jobs:
           uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
           uv pip install --system pytest pytest-mock pytest-asyncio fastapi uvicorn numpy python-dotenv pydantic structlog
 
-      - name: Run Pytest in Isolation
+      # Ключевой шаг: ловим "затенение" ДО pytest
+      - name: Sanity check langgraph import (must be site-packages)
+        run: |
+          python3 - << 'PY'
+          import os, sys, pathlib
+          import importlib.metadata as md
+
+          # 1) быстрый детектор самого частого кейса
+          if pathlib.Path("langgraph.py").exists():
+            raise SystemExit("FATAL: repo has ./langgraph.py which shadows the langgraph package. Rename/remove it.")
+
+          print("PYTHON:", sys.version)
+          print("CWD:", os.getcwd())
+
+          # 2) проверяем, что установлен именно pip-пакет langgraph
+          print("langgraph dist version:", md.version("langgraph"))
+
+          # 3) проверяем, что импортируется пакет и у него есть graph
+          import langgraph
+          print("langgraph imported from:", getattr(langgraph, "__file__", None))
+          from langgraph.graph import StateGraph, END
+          print("OK: from langgraph.graph import StateGraph, END")
+          PY
+
+      - name: Run Pytest
         env:
           OPENAI_API_KEY: "mock-key"
         run: |
-          # 1. Сначала проверяем, где python видит langgraph ДО запуска pytest
-          python3 -c "import langgraph; print(f'--- DEBUG: Langgraph source: {langgraph.__file__}')"
-          
-          # 2. ТРЮК: Запускаем pytest, явно указывая, что текущая папка НЕ является пакетом
-          # Мы используем '-c /dev/null', чтобы игнорировать любые настройки в pyproject.toml, 
-          # которые могут ломать импорты
           export PYTHONPATH="${{ github.workspace }}"
           python3 -m pytest -v \
+            --rootdir="${{ github.workspace }}" \
             -c /dev/null \
             --import-mode=importlib \
             --ignore=services/embedding-service \
