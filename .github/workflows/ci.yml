@@ -3,16 +3,16 @@ on: [push, pull_request]
 
 jobs:
   test:
+    name: Logic & API Validation
     runs-on: ubuntu-latest
     steps:
-      - name: Maximize Space (The Only Way)
+      - name: Maximize Build Space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 18000 # Оставляем 18ГБ под систему, остальное под код
+          root-reserve-mb: 10240
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
-          remove-docker-images: 'true'
 
       - uses: actions/checkout@v4
 
@@ -21,32 +21,32 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Isolated Installation
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           
-          # 1. СНАЧАЛА ставим только критический стек LangGraph без кэша
-          pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0" langchain-openai langchain-community
+          # 1. Install critical stack while disk is fresh
+          pip install --no-cache-dir langgraph==0.2.60 "langchain-core>=0.3.0"
           
-          # 2. Проверяем импорт СРАЗУ (если упадет тут - значит диск или библиотека битая)
-          python3 -c "import langgraph.graph; print('✅ Langgraph installed successfully')"
+          # 2. Install lightweight CPU torch (critical for space)
+          pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
           
-          # 3. Ставим остальные зависимости по одной, чтобы видеть где кончится место
-          pip install --no-cache-dir pytest pytest-mock pytest-asyncio structlog fastapi uvicorn
-          
-          # 4. Ставим ТЯЖЕЛЫЙ блок (Torch) в самом конце и только CPU версию
-          pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu || echo "Torch failed, but we continue"
+          # 3. Install remaining requirements
+          pip install --no-cache-dir -r requirements.txt || true
+          pip install --no-cache-dir pytest pytest-mock pytest-asyncio fastapi uvicorn structlog
 
-      - name: Debug and Run
+      - name: Run Pytest
         env:
-          PYTHONPATH: ${{ github.workspace }}
           OPENAI_API_KEY: "mock-key"
+          DEEPSEEK_API_KEY: "mock-key"
+          PINECONE_API_KEY: "mock-key"
         run: |
-          echo "--- sys.path inside pytest ---"
-          # Создаем временный скрипт отладки
-          echo "import sys; import langgraph; print(f'Langgraph path: {langgraph.__file__}'); print(f'Path: {sys.path}')" > debug_path.py
-          python3 debug_path.py
+          # The key fix: put site-packages at the START of PYTHONPATH
+          SITE_PKGS=$(python3 -c 'import site; print(site.getsitepackages()[0])')
+          export PYTHONPATH="$SITE_PKGS:${{ github.workspace }}"
           
-          # Запускаем pytest с ПОЛНОЙ изоляцией
-          # -p no:cacheprovider убирает создание лишних папок .pytest_cache
-          python3 -m pytest -v --import-mode=importlib -p no:cacheprovider
+          echo "--- Environment Check ---"
+          python3 -c "import langgraph.graph; print(f'✓ Langgraph found at: {langgraph.__file__}')"
+          
+          # Run pytest recursively across the project
+          python3 -m pytest -v --import-mode=importlib
