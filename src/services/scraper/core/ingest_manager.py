@@ -159,11 +159,16 @@ class IngestManager:
             "EMBEDDING_SERVICE_URL", "http://embedding-service:8001"
         )
         
+        # Get pinecone_index_name from parameter or environment variable
+        self.pinecone_index_name = pinecone_index_name or os.getenv(
+            "PINECONE_INDEX_NAME", None
+        )
+        
         # Initialize Pinecone client
         try:
             self.vector_store = VectorStore()
-            if pinecone_index_name:
-                self.vector_store.index_name = pinecone_index_name
+            if self.pinecone_index_name:
+                self.vector_store.index_name = self.pinecone_index_name
             logger.info(f"Pinecone client initialized: index={self.vector_store.index_name}")
         except Exception as e:
             logger.error(f"Failed to initialize Pinecone client: {str(e)}")
