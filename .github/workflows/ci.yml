@@ -47,17 +47,22 @@ jobs:
           export PYTHONPATH="${{ github.workspace }}"
           python3 -c "import langgraph.graph; print(f'✓ Langgraph is package at: {langgraph.__file__}')"
 
-      - name: Run Pytest
+      - name: Run Pytest (Ultra Isolation)
         env:
           OPENAI_API_KEY: "mock-key"
           DEEPSEEK_API_KEY: "mock-key"
           PINECONE_API_KEY: "mock-key"
           BACKEND_API_URL: "http://localhost:8000"
         run: |
-          # Force Python to look at site-packages first to avoid local shadowing
+          echo "--- 1. Project Structure Check ---"
+          ls -F
+          
+          echo "--- 2. Running Pytest ---"
           SITE_PKGS=$(python3 -c 'import site; print(site.getsitepackages()[0])')
           export PYTHONPATH="$SITE_PKGS:${{ github.workspace }}"
-          python3 -m pytest tests/ -v --import-mode=importlib
+          
+          # We remove 'tests/' and let pytest discover tests automatically
+          python3 -m pytest -v --import-mode=importlib
 
   docker-build:
     name: Docker Build Check
