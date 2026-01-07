@@ -819,7 +819,7 @@ tab_chat, tab_search, tab_cv, tab_diagnostics = st.tabs([
 # ============================================================================
 with tab_chat:
     st.header("💬 AI Recruiter")
-    st.markdown("Chat with the AI recruiter to find your ideal role at a16z portfolio companies.")
+    st.markdown("Chat with the AI recruiter to find your ideal role at top VC portfolio companies.")
 
     # Show persona notification if active
     if st.session_state.get("persona"):
