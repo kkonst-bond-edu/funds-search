@@ -1,0 +1,46 @@
+name: Daily Vacancy Scraper
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Запуск каждый день в полночь
+  workflow_dispatch: # Позволяет запустить вручную кнопкой в GitHub
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip' # Ускоряет повторные запуски
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          playwright install --with-deps chromium # Нужно для работы BrowserManager
+
+      - name: Run Scraper
+        env:
+          # Сюда прописываем все твои API ключи
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+          PINECONE_ENVIRONMENT: ${{ secrets.PINECONE_ENVIRONMENT }}
+          PINECONE_INDEX_NAME: ${{ secrets.PINECONE_INDEX_NAME }}
+          AZURE_EMBEDDING_ENDPOINT: ${{ secrets.AZURE_EMBEDDING_ENDPOINT }}
+          # Если есть другие переменные из .env, добавь их сюда
+        run: python -m src.services.scraper.main
+
+      - name: Commit and push changes
+        # Это нужно, чтобы vacancies_dump.json обновлялся прямо в репозитории
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add vacancies_dump.json
+          git commit -m "chore: update vacancies dump [skip ci]" || echo "No changes to commit"
+          git push

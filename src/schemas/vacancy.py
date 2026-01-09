@@ -2,26 +2,55 @@
 Vacancy Search Service schemas using Pydantic V2.
 """
 
+from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
+class RoleCategory(str, Enum):
+    """Role category enumeration for job classifications."""
+
+    ENGINEERING = "Engineering"
+    PRODUCT = "Product"
+    DESIGN = "Design"
+    DATA_ANALYTICS = "Data & Analytics"
+    SALES_BUSINESS_DEVELOPMENT = "Sales & Business Development"
+    MARKETING = "Marketing"
+    OPERATIONS = "Operations"
+    FINANCE = "Finance"
+    LEGAL = "Legal"
+    PEOPLE_HR = "People & HR"
+    OTHER = "Other"
+
+
+class ExperienceLevel(str, Enum):
+    """Experience level enumeration for job positions."""
+
+    JUNIOR = "Junior"
+    MID = "Mid"
+    SENIOR = "Senior"
+    LEAD = "Lead"
+    EXECUTIVE = "Executive"
+    UNKNOWN = "Unknown"
+
+
 class CompanyStage(str, Enum):
-    """Company funding stage enumeration matching a16z categories."""
+    """Company funding stage enumeration."""
 
     SEED = "Seed"
     SERIES_A = "Series A"
-    GROWTH = "Growth (Series B or later)"
-    EMPLOYEES_1_10 = "1-10 employees"
-    EMPLOYEES_10_100 = "10-100 employees"
+    SERIES_B = "Series B"
+    SERIES_C = "Series C"
+    GROWTH = "Growth"
+    PUBLIC = "Public"
 
     @classmethod
     def get_stage_value(cls, stage) -> str:
         """
         Robust helper to get stage value from Enum or string.
         Prevents "'str' object has no attribute 'value'" errors.
-        Handles a16z-specific stage strings.
+        Handles legacy a16z-specific stage strings and maps them to new enum values.
 
         Args:
             stage: CompanyStage enum, string, or any value
@@ -32,7 +61,7 @@ class CompanyStage(str, Enum):
         if isinstance(stage, cls):
             return stage.value
         elif isinstance(stage, str):
-            # Normalize a16z-specific strings to enum values
+            # Normalize legacy and a16z-specific strings to enum values
             stage_lower = stage.lower()
             
             # Map "Growth (Series B or later)" -> GROWTH
@@ -47,11 +76,11 @@ class CompanyStage(str, Enum):
             if "series a" in stage_lower:
                 return cls.SERIES_A.value
             
-            # Map employee count strings
+            # Map legacy employee count strings to appropriate stages
             if "1-10 employees" in stage_lower or "1–10 employees" in stage_lower:
-                return cls.EMPLOYEES_1_10.value
+                return cls.SEED.value  # Small companies typically at seed stage
             if "10-100 employees" in stage_lower or "10–100 employees" in stage_lower:
-                return cls.EMPLOYEES_10_100.value
+                return cls.SERIES_A.value  # Medium companies typically at Series A
             
             # If it matches an enum value exactly, return it
             for enum_member in cls:
@@ -101,14 +130,18 @@ class Vacancy(BaseModel):
 
     title: str = Field(..., description="Vacancy title")
     company_name: str = Field(..., description="Company name")
-    company_stage: CompanyStage = Field(..., description="Company funding stage")
+    company_stage: str = Field(..., description="Company funding stage (e.g., 'Series A', 'Growth', '1000+ employees')")
     location: str = Field(..., description="Job location")
-    industry: str = Field(..., description="Industry sector")
+    industry: Optional[str] = Field(None, description="Industry sector (maps to 'Sector' in UI)")
+    category: Optional[str] = Field(None, description="Job function category (maps to 'Job Function' in UI)")
+    experience_level: Optional[str] = Field(None, description="Required experience level")
+    remote_option: bool = Field(False, description="Whether remote work is available")
+    is_hybrid: bool = Field(False, description="Whether the role is hybrid")
     salary_range: Optional[str] = Field(None, description="Salary range (e.g., '$120k-$180k')")
     description_url: str = Field(..., description="URL to full job description")
     required_skills: List[str] = Field(default_factory=list, description="Required skills list")
-    remote_option: bool = Field(False, description="Whether remote work is available")
-    source_url: Optional[str] = Field(None, description="Source URL used to fetch this vacancy")
+    employee_count: Optional[str] = Field(None, description="Company employee count")
+    full_description: str = Field(..., description="Full job description for vector search")
 
     class Config:
         """Pydantic configuration."""
@@ -120,10 +153,12 @@ class Vacancy(BaseModel):
                 "company_name": "LogiTech AI",
                 "company_stage": "Series A",
                 "location": "San Francisco, CA",
-                "industry": "Logistics",
+                "industry": "AI",
+                "category": "Engineering",
+                "experience_level": "Senior",
+                "remote_option": True,
                 "salary_range": "$150k-$200k",
                 "description_url": "https://example.com/jobs/backend-engineer",
                 "required_skills": ["Python", "FastAPI", "PostgreSQL", "Docker"],
-                "remote_option": True,
             }
         }

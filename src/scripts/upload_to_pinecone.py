@@ -8,6 +8,8 @@ import json
 import os
 import re
 import sys
+import hashlib
+import unicodedata
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 
@@ -38,38 +40,84 @@ logger = structlog.get_logger()
 
 def slugify(text: str) -> str:
     """
-    Convert text to a URL-safe slug.
+    Convert text to a URL-safe slug, handling non-Latin characters.
+    
+    Handles Cyrillic and other non-Latin characters by:
+    1. Normalizing Unicode characters
+    2. Transliterating where possible using unicodedata
+    3. Stripping remaining non-ASCII characters
     
     Args:
-        text: Text to slugify
+        text: Text to slugify (can contain non-Latin characters)
         
     Returns:
-        URL-safe slug string
+        URL-safe slug string with only ASCII characters
     """
+    if not text:
+        return ""
+    
+    # Normalize Unicode (NFD = Canonical Decomposition)
+    text = unicodedata.normalize('NFD', text)
+    
     # Convert to lowercase
     text = text.lower()
+    
+    # Transliteration map for common non-ASCII characters
+    transliteration_map = {
+        # Cyrillic to Latin approximations
+        'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
+        'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
+        'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+        'ф': 'f', 'х': 'h', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
+        'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya',
+        # Uppercase Cyrillic
+        'А': 'a', 'Б': 'b', 'В': 'v', 'Г': 'g', 'Д': 'd', 'Е': 'e', 'Ё': 'yo',
+        'Ж': 'zh', 'З': 'z', 'И': 'i', 'Й': 'y', 'К': 'k', 'Л': 'l', 'М': 'm',
+        'Н': 'n', 'О': 'o', 'П': 'p', 'Р': 'r', 'С': 's', 'Т': 't', 'У': 'u',
+        'Ф': 'f', 'Х': 'h', 'Ц': 'ts', 'Ч': 'ch', 'Ш': 'sh', 'Щ': 'sch',
+        'Ъ': '', 'Ы': 'y', 'Ь': '', 'Э': 'e', 'Ю': 'yu', 'Я': 'ya',
+    }
+    
+    # Apply transliteration
+    transliterated = ''.join(transliteration_map.get(char, char) for char in text)
+    
+    # Remove all non-ASCII characters that weren't transliterated
+    text = re.sub(r'[^\x00-\x7F\w\s-]', '', transliterated)
+    
     # Replace spaces and special characters with hyphens
     text = re.sub(r'[^\w\s-]', '', text)
     text = re.sub(r'[-\s]+', '-', text)
+    
     # Remove leading/trailing hyphens
     text = text.strip('-')
+    
     return text
 
 
-def generate_vacancy_id(company_name: str, title: str) -> str:
+def generate_vacancy_id(company_name: str, title: str, description_url: str) -> str:
     """
-    Generate a unique slugified ID for a vacancy.
+    Generate a unique slugified ID for a vacancy with URL hash to prevent collisions.
+    
+    Format: slugify(company)-slugify(title)-hash
+    
+    This ensures that if a company has multiple roles with the same title but different URLs,
+    they will have unique IDs in Pinecone.
     
     Args:
         company_name: Company name
         title: Job title
+        description_url: URL of the job description (used for hash)
         
     Returns:
-        Slugified ID like "company-name-job-title"
+        Slugified ID like "company-name-job-title-abc12345"
     """
     company_slug = slugify(company_name)
     title_slug = slugify(title)
-    return f"{company_slug}-{title_slug}"
+    
+    # Generate a short hash from the description URL
+    url_hash = hashlib.md5(description_url.encode('utf-8')).hexdigest()[:8]
+    
+    return f"{company_slug}-{title_slug}-{url_hash}"
 
 
 def generate_search_text(vacancy: Dict[str, Any]) -> str:
@@ -233,11 +281,12 @@ async def upload_vacancies_to_pinecone(
         
         if title == "Unknown" or company_name == "Unknown":
             skipped_count += 1
+            description_url = vacancy.get("description_url", "")
             logger.warning(
                 "skipping_unknown_vacancy",
                 title=title,
                 company_name=company_name,
-                vacancy_id=generate_vacancy_id(company_name, title)
+                vacancy_id=generate_vacancy_id(company_name, title, description_url)
             )
         else:
             valid_vacancies.append(vacancy)
@@ -276,7 +325,8 @@ async def upload_vacancies_to_pinecone(
             for vacancy, embedding in zip(batch, embeddings):
                 vacancy_id = generate_vacancy_id(
                     vacancy.get("company_name", "unknown"),
-                    vacancy.get("title", "unknown")
+                    vacancy.get("title", "unknown"),
+                    vacancy.get("description_url", "")
                 )
                 
                 # Filter out None/null values from metadata (Pinecone doesn't accept null values)

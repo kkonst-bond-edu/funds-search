@@ -73,3 +73,4 @@ docker compose run --rm api python -c "import langchain_openai; print('ok')"
 ```
 
 
+
