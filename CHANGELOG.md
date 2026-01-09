@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] - 2026-01-09
+
+### Added
+- **Duplicate Vacancy Removal Script**: New utility for cleaning up duplicate vacancies in Pinecone
+  - `src/scripts/remove_duplicates.py` script to identify and remove duplicate vacancies
+  - Identifies duplicates by `description_url` and keeps only the most recent entry
+  - Supports dry-run mode for safe testing before deletion
+  - Batch deletion of duplicate vectors from Pinecone namespace
+  - Comprehensive logging of duplicate detection and removal process
+
+### Improved
+- **Scraping System**: Enhanced vacancy scraping and ingestion pipeline
+  - Improved data quality checks: automatically skips vacancies with poor data quality (both title and company contain 'Unknown')
+  - Better timeout handling: increased timeout to 180 seconds for slow-loading job boards
+  - Thread-safe vacancy processing with proper locking mechanisms
+  - Enhanced error handling and logging throughout the scraping workflow
+  - Optimized resource usage with 1-second delays between vacancy processing to prevent resource exhaustion
+
+- **Manual Search Functionality**: Enhanced vacancy search capabilities
+  - Improved search query building and filtering logic
+  - Better integration with Pinecone vector search
+  - Enhanced search response structure with detailed statistics
+  - Improved handling of search filters and parameters
+
+### Technical Details
+- Duplicate removal script supports both dry-run and actual deletion modes
+- Scraping improvements ensure better data quality and reliability
+- Manual search enhancements provide better user experience and search accuracy
+
 ## [2.2.0] - 2025-01-XX
 
 ### Added

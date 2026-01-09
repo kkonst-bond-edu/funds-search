@@ -107,6 +107,9 @@ class VacancyFilter(BaseModel):
     )
     industry: Optional[str] = Field(None, description="Industry filter")
     min_salary: Optional[int] = Field(None, ge=0, description="Minimum salary requirement")
+    category: Optional[str] = Field(None, description="Job category filter (e.g., 'Engineering', 'Product')")
+    experience_level: Optional[str] = Field(None, description="Experience level filter (e.g., 'Junior', 'Senior')")
+    employee_count: Optional[List[str]] = Field(default_factory=list, description="Employee count filter (e.g., '100-1000 employees')")
 
     class Config:
         """Pydantic configuration."""

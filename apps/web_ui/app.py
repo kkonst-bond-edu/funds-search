@@ -38,7 +38,7 @@ TIMEOUT = 300.0  # seconds (5 minutes) - increased for CV processing and matchin
 
 # Page configuration
 st.set_page_config(
-    page_title="Funds Search - Candidate Matching",
+    page_title="AI Talent Matcher - Job Search",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -538,7 +538,7 @@ def display_vacancy_card(vacancy: dict, index: int):
     elif hasattr(vacancy, 'model_dump'):
         vacancy = vacancy.model_dump()
 
-    # Extract fields
+    # Extract fields - include all fields from Vacancy schema
     title = vacancy.get("title", "Unknown")
     company_name = vacancy.get("company_name", "Unknown")
     company_stage = vacancy.get("company_stage", "Unknown")
@@ -546,10 +546,15 @@ def display_vacancy_card(vacancy: dict, index: int):
         company_stage = company_stage.value
     location = vacancy.get("location", "Not specified")
     industry = vacancy.get("industry", "Technology")
+    category = vacancy.get("category")
+    experience_level = vacancy.get("experience_level")
     salary_range = vacancy.get("salary_range")
+    min_salary = vacancy.get("min_salary")
+    employee_count = vacancy.get("employee_count")
     description_url = vacancy.get("description_url", "")
     required_skills = vacancy.get("required_skills", [])
     remote_option = vacancy.get("remote_option", False)
+    is_hybrid = vacancy.get("is_hybrid", False)
     match_reason = vacancy.get("match_reason")  # AI match reasoning from MatchmakerAgent (new field name)
     match_reasoning = vacancy.get("match_reasoning") or match_reason  # Fallback to old field name for compatibility
     ai_insight = vacancy.get("ai_insight") or match_reasoning or match_reason  # AI insight from MatchmakerAgent
@@ -569,12 +574,16 @@ def display_vacancy_card(vacancy: dict, index: int):
         with col2:
             # Display large, clean AI Match Score (remove duplicates - this is the only one)
             current_score = score if score is not None else (ai_match_score * 10 if ai_match_score is not None else None)
-            # Check if persona is missing - show "Resume Required" badge
+            # Check if persona is missing - show "Resume Required" badge ONLY in AI Recruiter tab (not Manual Search)
+            # Manual Search results don't have persona_applied field, so we check if it's missing
             has_persona = st.session_state.get("persona") is not None
             persona_applied = vacancy.get("persona_applied", False)
+            # Manual Search doesn't include persona_applied field, so if it's missing or False and no score, it's Manual Search
+            is_manual_search = "persona_applied" not in vacancy or (not persona_applied and score is None and ai_match_score is None)
             
-            if not has_persona or not persona_applied:
-                # Show greyed-out "Resume Required" badge when CV is missing
+            # Only show "Resume Required" in AI Recruiter tab, not in Manual Search
+            if not is_manual_search and (not has_persona or not persona_applied):
+                # Show greyed-out "Resume Required" badge when CV is missing (only in AI Recruiter)
                 st.markdown(
                     '<div style="text-align: center; padding: 1rem;">'
                     '<div style="font-size: 1.25rem; font-weight: bold; color: #999; background-color: #f3f4f6; padding: 0.5rem; border-radius: 0.5rem;">Resume Required</div>'
@@ -583,7 +592,7 @@ def display_vacancy_card(vacancy: dict, index: int):
                     unsafe_allow_html=True
                 )
             # Check if score is 0 but analysis exists and persona is present - show "Analyzing..." instead
-            elif current_score == 0 and ai_insight and has_persona:
+            elif not is_manual_search and current_score == 0 and ai_insight and has_persona:
                 st.markdown(
                     '<div style="text-align: center; padding: 1rem;">'
                     '<div style="font-size: 1.5rem; font-weight: bold; color: #666;">Analyzing...</div>'
@@ -607,17 +616,11 @@ def display_vacancy_card(vacancy: dict, index: int):
                     f'</div>',
                     unsafe_allow_html=True
                 )
-            else:
-                st.markdown(
-                    '<div style="text-align: center; padding: 1rem;">'
-                    '<div style="font-size: 1.25rem; color: #999;">N/A</div>'
-                    '</div>',
-                    unsafe_allow_html=True
-                )
+            # Don't show anything if no score (Manual Search doesn't need score display)
         
         st.markdown("---")
         
-        # Metadata Clean-up: Display Location, Industry, and Company Stage as clean tags
+        # Metadata Clean-up: Display Location, Industry, Company Stage, Employee Count as clean tags
         metadata_tags = []
         if location and location != "Not specified":
             metadata_tags.append(f"📍 {location}")
@@ -625,12 +628,25 @@ def display_vacancy_card(vacancy: dict, index: int):
             metadata_tags.append(f"🏢 {industry}")
         if company_stage and company_stage != "Unknown":
             metadata_tags.append(f"📈 {company_stage}")
+        if employee_count:
+            metadata_tags.append(f"👥 {employee_count}")
         if remote_option:
             metadata_tags.append("🌐 Remote")
+        if is_hybrid:
+            metadata_tags.append("🔄 Hybrid")
         
         if metadata_tags:
             tags_html = " • ".join(metadata_tags)
             st.markdown(f'<div style="margin-bottom: 1rem; color: #555; font-size: 0.9rem;">{tags_html}</div>', unsafe_allow_html=True)
+        
+        # Additional metadata in a clean grid (without min_salary)
+        metadata_cols = st.columns(2)
+        with metadata_cols[0]:
+            if category:
+                st.caption(f"**Category:** {category}")
+        with metadata_cols[1]:
+            if experience_level:
+                st.caption(f"**Experience:** {experience_level}")
         
         # Required Skills
         if required_skills:
@@ -639,9 +655,37 @@ def display_vacancy_card(vacancy: dict, index: int):
         else:
             st.markdown("**Required Skills:** Not specified")
         
-        # Salary Range
+        # Salary Range - improved formatting with cleaning
         if salary_range:
-            st.markdown(f"**Salary Range:** {salary_range}")
+            import re
+            # Clean salary_range if it contains dict representations (e.g., "{'label': 'USD', 'value': 'USD'}")
+            if isinstance(salary_range, str) and ("'label'" in salary_range or '"label"' in salary_range):
+                # Extract only numbers from the string
+                numbers = re.findall(r'\d+[\d,]*', salary_range)
+                if numbers:
+                    # Remove commas and convert to int
+                    clean_numbers = [int(n.replace(',', '')) for n in numbers if n.replace(',', '').isdigit()]
+                    if len(clean_numbers) == 1:
+                        salary_range = f"${clean_numbers[0]:,}"
+                    elif len(clean_numbers) >= 2:
+                        salary_range = f"${clean_numbers[0]:,} - ${clean_numbers[-1]:,}"
+                    else:
+                        salary_range = None
+            
+            if salary_range:
+                # Extract numbers from salary range for better display
+                salary_numbers = re.findall(r'\$?[\d,]+', salary_range)
+                if salary_numbers:
+                    # Format with proper styling
+                    st.markdown(
+                        f'<div style="margin: 0.5rem 0; padding: 0.75rem; background-color: #f0f9ff; border-radius: 0.5rem; border-left: 4px solid #1f77b4;">'
+                        f'<strong style="color: #1f77b4; font-size: 0.9rem;">💰 Salary Range:</strong> '
+                        f'<span style="font-weight: bold; font-size: 1.1rem; color: #1f77b4; margin-left: 0.5rem;">{salary_range}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.markdown(f"**Salary Range:** {salary_range}")
         
         # Description URL link
         if description_url:
@@ -755,7 +799,7 @@ if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = [
         {
             "role": "assistant",
-            "content": "Hello! I'm your AI recruiter for a16z portfolio companies. Describe in your own words: what role are you looking for, your main tech stack, and any industry preferences (e.g., AI, Crypto, or BioTech)?"
+            "content": "Hello! I'm your AI recruiter. Describe in your own words: what role are you looking for, your main tech stack, and any industry preferences (e.g., AI, Crypto, or BioTech)?"
         }
     ]
 
@@ -764,7 +808,7 @@ if "persona" not in st.session_state:
     st.session_state.persona = None
 
 # Main UI
-st.title("A16Z Portfolio Talent Matcher")
+st.title("AI Talent Matcher")
 st.info("✅ Search Mode: Database (Verified)")
 
 # Sidebar - Clean: Only Configuration and Service Health
@@ -819,7 +863,7 @@ tab_chat, tab_search, tab_cv, tab_diagnostics = st.tabs([
 # ============================================================================
 with tab_chat:
     st.header("💬 AI Recruiter")
-    st.markdown("Chat with the AI recruiter to find your ideal role at top VC portfolio companies.")
+    st.markdown("Chat with the AI recruiter to find your ideal role at startup companies.")
 
     # Show persona notification if active
     if st.session_state.get("persona"):
@@ -1034,7 +1078,7 @@ with tab_chat:
         st.session_state.chat_messages = [
             {
                 "role": "assistant",
-                "content": "Hello! I'm your AI recruiter for a16z portfolio companies. Describe in your own words: what role are you looking for, your main tech stack, and any industry preferences (e.g., AI, Crypto, or BioTech)?"
+                "content": "Hello! I'm your AI recruiter. Describe in your own words: what role are you looking for, your main tech stack, and any industry preferences (e.g., AI, Crypto, or BioTech)?"
             }
         ]
         st.rerun()
@@ -1049,142 +1093,173 @@ with tab_search:
     # Display search mode status
     st.info("✅ Search Mode: Database (Verified)")
 
+    # Initialize session state for search results
+    if "search_results" not in st.session_state:
+        st.session_state.search_results = []
+    if "search_performed" not in st.session_state:
+        st.session_state.search_performed = False
+
     # Search form - All filters inside this tab
     col1, col2 = st.columns(2)
 
     with col1:
-        role = st.text_input("Role / Title", placeholder="e.g., MLOps Engineer, ML Director")
-        industry = st.text_input("Industry", placeholder="e.g., Logistics, FreightTech")
+        role = st.text_input("Role / Title", placeholder="e.g., MLOps Engineer, ML Director", key="search_role")
+        industry = st.text_input("Industry", placeholder="e.g., Logistics, FreightTech", key="search_industry")
         skills_input = st.text_input(
-            "Required Skills (comma-separated)", placeholder="e.g., Python, Kubernetes, Docker"
+            "Required Skills (comma-separated)", placeholder="e.g., Python, Kubernetes, Docker", key="search_skills"
         )
-        location = st.text_input("Location", placeholder="e.g., San Francisco, Remote")
+        location = st.text_input("Location", placeholder="e.g., San Francisco, Remote", key="search_location")
+        
+        # Additional filters from VacancyFilter schema
+        category = st.selectbox(
+            "Category",
+            options=["", "Engineering", "Product", "Design", "Data & Analytics", "Sales & Business Development", 
+                    "Marketing", "Operations", "Finance", "Legal", "People & HR", "Other"],
+            index=0,
+            key="search_category"
+        )
+        experience_level = st.selectbox(
+            "Experience Level",
+            options=["", "Junior", "Mid", "Senior", "Lead", "Executive"],
+            index=0,
+            key="search_experience"
+        )
 
     with col2:
-        min_salary = st.number_input("Minimum Salary", min_value=0, value=0, step=10000)
-        is_remote = st.checkbox("Remote Work Available")
+        min_salary = st.number_input("Minimum Salary", min_value=0, value=0, step=10000, key="search_min_salary")
+        is_remote = st.checkbox("Remote Work Available", key="search_remote")
+        is_hybrid = st.checkbox("Hybrid Work Available", key="search_hybrid")
 
         # Company stages - must match CompanyStage enum values exactly
         st.subheader("Company Stages")
-        seed = st.checkbox("Seed", value=False)
-        series_a = st.checkbox("Series A", value=False)
-        growth = st.checkbox("Growth (Series B or later)", value=False)
-        employees_1_10 = st.checkbox("1-10 employees", value=False)
-        employees_10_100 = st.checkbox("10-100 employees", value=False)
+        seed = st.checkbox("Seed", value=False, key="search_seed")
+        series_a = st.checkbox("Series A", value=False, key="search_series_a")
+        growth = st.checkbox("Growth", value=False, key="search_growth", help="Includes Series B, Series C, and Growth stage companies")
+        public = st.checkbox("Public", value=False, key="search_public")
+        
+        # Employee count filters
+        st.subheader("Employee Count")
+        employees_1_10 = st.checkbox("1-10 employees", value=False, key="search_emp_1_10")
+        employees_10_100 = st.checkbox("10-100 employees", value=False, key="search_emp_10_100")
+        employees_100_1000 = st.checkbox("100-1000 employees", value=False, key="search_emp_100_1000")
+        employees_1000_plus = st.checkbox("1000+ employees", value=False, key="search_emp_1000_plus")
 
         # Build company stages list with exact enum values
+        # Growth includes Series B, Series C, and Growth
         company_stages = []
         if seed:
             company_stages.append("Seed")
         if series_a:
             company_stages.append("Series A")
         if growth:
-            company_stages.append("Growth (Series B or later)")
-        if employees_1_10:
-            company_stages.append("1-10 employees")
-        if employees_10_100:
-            company_stages.append("10-100 employees")
+            # Growth includes Series B, Series C, and Growth - send as single "Growth" value
+            # API will expand it automatically
+            company_stages.append("Growth")
+        if public:
+            company_stages.append("Public")
 
-    # Search button
-    if st.button("🔍 Search Database", type="primary", use_container_width=True):
-        # Build filter parameters
-        filter_params = {}
+    # Search button - use form to prevent page reload
+    with st.form("search_form", clear_on_submit=False):
+        search_clicked = st.form_submit_button("🔍 Search Database", type="primary", use_container_width=True)
+        
+        if search_clicked:
+            # Build filter parameters
+            filter_params = {}
 
-        if role:
-            filter_params["role"] = role
-        if industry:
-            filter_params["industry"] = industry
-        if skills_input:
-            filter_params["skills"] = [s.strip() for s in skills_input.split(",") if s.strip()]
-        if location:
-            filter_params["location"] = location
-        if min_salary > 0:
-            filter_params["min_salary"] = min_salary
-        if is_remote:
-            filter_params["is_remote"] = True
-        if company_stages:
-            filter_params["company_stages"] = company_stages
+            if role:
+                filter_params["role"] = role
+            if industry:
+                filter_params["industry"] = industry
+            if skills_input:
+                filter_params["skills"] = [s.strip() for s in skills_input.split(",") if s.strip()]
+            if location:
+                filter_params["location"] = location
+            if min_salary > 0:
+                filter_params["min_salary"] = min_salary
+            if is_remote:
+                filter_params["is_remote"] = True
+            if company_stages:
+                filter_params["company_stages"] = company_stages
+            if category:
+                filter_params["category"] = category
+            if experience_level:
+                filter_params["experience_level"] = experience_level
+            
+            # Build employee count list
+            employee_counts = []
+            if employees_1_10:
+                employee_counts.append("1-10 employees")
+            if employees_10_100:
+                employee_counts.append("10-100 employees")
+            if employees_100_1000:
+                employee_counts.append("100-1000 employees")
+            if employees_1000_plus:
+                employee_counts.append("1000+ employees")
+            if employee_counts:
+                filter_params["employee_count"] = employee_counts
 
-        # Make API request to search endpoint
-        try:
-            search_endpoint = f"{BACKEND_API_URL}/api/v1/vacancies/search"
-            logger.info(f"Searching vacancies at: {search_endpoint}")
-
-            with st.spinner("🔍 Searching for vacancies..."):
-                with httpx.Client(timeout=120.0) as client:
-                    # Always use Pinecone database (use_firecrawl=False by default)
-                    params = {"use_firecrawl": "false"}
-                    response = client.post(
-                        search_endpoint,
-                        json=filter_params,
-                        params=params,
-                    )
-                    response.raise_for_status()
-                    vacancies = response.json()
-
-            if vacancies:
-                st.success(f"✅ Found {len(vacancies)} vacancy/vacancies")
-                st.markdown("---")
-
-                # Display vacancies in cards
-                for idx, vacancy in enumerate(vacancies):
-                    with st.container():
-                        col1, col2 = st.columns([3, 1])
-
-                        with col1:
-                            st.subheader(f"💼 {vacancy['title']}")
-                            st.markdown(
-                                f"**Company:** {vacancy['company_name']} | **Stage:** {vacancy['company_stage']} | **Industry:** {vacancy['industry']}"
-                            )
-                            st.markdown(f"📍 **Location:** {vacancy['location']}")
-
-                            if vacancy.get("salary_range"):
-                                st.markdown(f"💰 **Salary:** {vacancy['salary_range']}")
-
-                            if vacancy.get("required_skills"):
-                                skills_str = ", ".join(
-                                    [f"`{skill}`" for skill in vacancy["required_skills"]]
-                                )
-                                st.markdown(f"**Skills:** {skills_str}")
-
-                            if vacancy.get("remote_option"):
-                                st.markdown(
-                                    '<span style="background-color: #10b981; color: white; padding: 0.25rem 0.75rem; border-radius: 0.5rem; font-size: 0.875rem; font-weight: 500;">🌐 Remote</span>',
-                                    unsafe_allow_html=True,
-                                )
-
-                        with col2:
-                            if vacancy.get("description_url"):
-                                st.link_button(
-                                    "View Details →",
-                                    vacancy["description_url"],
-                                    use_container_width=True,
-                                )
-
-                        if idx < len(vacancies) - 1:
-                            st.markdown("---")
-            else:
-                st.info("🔍 No vacancies found matching your criteria. Try adjusting your filters.")
-
-        except httpx.HTTPStatusError as e:
-            error_detail = e.response.text[:200] if e.response.text else "Unknown error"
+            # Make API request to search endpoint
             try:
-                error_json = e.response.json()
-                error_detail = error_json.get("detail", error_detail)
-            except Exception:
-                pass
+                search_endpoint = f"{BACKEND_API_URL}/api/v1/vacancies/search"
+                logger.info(f"Searching vacancies at: {search_endpoint}")
 
-            st.error(f"❌ API Error ({e.response.status_code}): {error_detail}")
+                with st.spinner("🔍 Searching for vacancies..."):
+                    with httpx.Client(timeout=120.0) as client:
+                        # Always use Pinecone database (use_firecrawl=False by default)
+                        params = {"use_firecrawl": "false"}
+                        response = client.post(
+                            search_endpoint,
+                            json=filter_params,
+                            params=params,
+                        )
+                        response.raise_for_status()
+                        result = response.json()
+                        vacancies = result.get("vacancies", [])
+                        
+                        # Remove duplicates by description_url
+                        seen_urls = set()
+                        unique_vacancies = []
+                        for v in vacancies:
+                            url = v.get("description_url", "")
+                            if url and url not in seen_urls:
+                                seen_urls.add(url)
+                                unique_vacancies.append(v)
+                        
+                        # Store results in session state
+                        st.session_state.search_results = unique_vacancies
+                        st.session_state.search_performed = True
 
-            if e.response.status_code == 503 and "firecrawl" in error_detail.lower():
-                st.info("💡 This error indicates Firecrawl is not properly configured. Check the health status in the sidebar.")
-            elif e.response.status_code == 401:
-                st.info("💡 Authentication failed. Please verify FIRECRAWL_API_KEY in your .env file.")
-        except httpx.RequestError as e:
-            st.error(f"❌ Connection Error: {str(e)}")
-            st.info(f"💡 Cannot reach backend at {BACKEND_API_URL}. Check if the API service is running.")
-        except Exception as e:
-            st.error(f"❌ Unexpected Error: {str(e)}")
+            except httpx.HTTPStatusError as e:
+                error_detail = e.response.text[:200] if e.response.text else "Unknown error"
+                try:
+                    error_json = e.response.json()
+                    error_detail = error_json.get("detail", error_detail)
+                except Exception:
+                    pass
+
+                st.error(f"❌ API Error ({e.response.status_code}): {error_detail}")
+
+                if e.response.status_code == 503 and "firecrawl" in error_detail.lower():
+                    st.info("💡 This error indicates Firecrawl is not properly configured. Check the health status in the sidebar.")
+                elif e.response.status_code == 401:
+                    st.info("💡 Authentication failed. Please verify FIRECRAWL_API_KEY in your .env file.")
+            except httpx.RequestError as e:
+                st.error(f"❌ Connection Error: {str(e)}")
+                st.info(f"💡 Cannot reach backend at {BACKEND_API_URL}. Check if the API service is running.")
+            except Exception as e:
+                st.error(f"❌ Unexpected Error: {str(e)}")
+    
+    # Display results (outside form to prevent reload)
+    if st.session_state.search_performed and st.session_state.search_results:
+        vacancies = st.session_state.search_results
+        st.success(f"✅ Found {len(vacancies)} unique vacancy/vacancies")
+        st.markdown("---")
+
+        # Display vacancies in improved cards
+        for idx, vacancy in enumerate(vacancies):
+            display_vacancy_card(vacancy, idx)
+    elif st.session_state.search_performed and not st.session_state.search_results:
+        st.info("🔍 No vacancies found matching your criteria. Try adjusting your filters.")
 
 # ============================================================================
 # TAB 3: CV ANALYSIS (Upload, Process, Match)

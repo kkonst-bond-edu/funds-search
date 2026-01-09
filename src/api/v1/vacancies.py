@@ -203,15 +203,18 @@ def filter_vacancies(vacancies: list[Vacancy], filter_params: VacancyFilter) -> 
                 
                 # Check if any normalized word matches in title (prioritize title matches)
                 # This handles "engineering" -> "engineer" matching
+                # Also handles "designer" matching "Motion Designer", "UI Designer", etc.
                 title_match = any(norm_word in title_lower for norm_word in normalized_words)
                 
                 # If modifiers are present (e.g., "frontend", "backend", "mobile"), they MUST be in title or skills
+                # BUT: if no modifiers are present (e.g., just "Designer"), don't require modifier match
                 modifier_match = True
                 if modifier_keywords:
                     modifier_match = any(mod in combined_text for mod in modifier_keywords)
                 
                 # Prioritize title matches - if role words match in title, it's a strong match
                 # This ensures "Backend Engineer" matches "Backend Software Engineer" in title
+                # And "Designer" matches "Motion Designer", "UI Designer", etc.
                 return title_match and modifier_match
             
             # Filter with smart matching - prioritize title matches
@@ -257,7 +260,18 @@ def filter_vacancies(vacancies: list[Vacancy], filter_params: VacancyFilter) -> 
 
     if filter_params.company_stages:
         # Use robust enum comparison to handle both Enum objects and strings
-        filter_vals = [CompanyStage.get_stage_value(s) for s in filter_params.company_stages]
+        # Expand "Growth" to include Series B, Series C, and Growth
+        expanded_stages = []
+        for stage in filter_params.company_stages:
+            normalized = CompanyStage.get_stage_value(stage)
+            if normalized == "Growth":
+                # Growth includes Series B, Series C, and Growth
+                expanded_stages.extend(["Series B", "Series C", "Growth"])
+            else:
+                expanded_stages.append(normalized)
+        
+        # Remove duplicates
+        filter_vals = list(set(expanded_stages))
         filtered = [
             v for v in filtered if CompanyStage.get_stage_value(v.company_stage) in filter_vals
         ]
@@ -268,10 +282,33 @@ def filter_vacancies(vacancies: list[Vacancy], filter_params: VacancyFilter) -> 
         filtered = [v for v in filtered if industry_lower in v.industry.lower()]
 
     if filter_params.min_salary:
-        # Simple heuristic: extract min from salary_range if available
-        # For mock data, we'll just return all if min_salary is set
-        # In production, this would parse salary_range properly
-        pass
+        # Filter by minimum salary
+        # We check vacancy.min_salary (already populated in metadata_to_vacancy)
+        filtered = [
+            v for v in filtered
+            if v.min_salary is not None and v.min_salary >= filter_params.min_salary
+        ]
+
+    if filter_params.category:
+        # Filter by category (case-insensitive)
+        category_lower = filter_params.category.lower()
+        filtered = [v for v in filtered if v.category and category_lower in v.category.lower()]
+
+    if filter_params.experience_level:
+        # Filter by experience level (case-insensitive)
+        exp_lower = filter_params.experience_level.lower()
+        filtered = [v for v in filtered if v.experience_level and exp_lower in v.experience_level.lower()]
+
+    if filter_params.employee_count:
+        # Filter by employee count (exact match or substring)
+        # Handle both "100-1000 employees" and "100–1000 employees" (different dashes)
+        employee_count_lower = [ec.lower().replace('–', '-') for ec in filter_params.employee_count]
+        filtered = [
+            v for v in filtered
+            if v.employee_count and any(
+                ec in v.employee_count.lower().replace('–', '-') for ec in employee_count_lower
+            )
+        ]
 
     return filtered
 
@@ -599,13 +636,21 @@ def build_search_query(filter_params: VacancyFilter, persona: Optional[dict] = N
             elif isinstance(skills, str):
                 skills_part = skills
     
-    # Build weighted query string: Role is primary, Skills are secondary
+    # Build weighted query string: Role is primary, Skills are secondary, Industry adds context
     query_parts = []
     if role_part:
         # Role is the primary component - this ensures role matching takes precedence
         query_parts.append(f"Role: {role_part}")
     if skills_part:
         query_parts.append(f"Skills: {skills_part}")
+    
+    # Add industry for better context (if provided)
+    if filter_params.industry:
+        query_parts.append(f"Industry: {filter_params.industry}")
+    
+    # Add location for context (if provided)
+    if filter_params.location:
+        query_parts.append(f"Location: {filter_params.location}")
     
     # Fallback: If no query parts in any mode, use generic query
     if not query_parts:
@@ -631,18 +676,28 @@ def build_pinecone_filter(filter_params: VacancyFilter, remote_available: Option
     filter_dict = {}
     
     # Metadata filtering: Use Pinecone metadata filters for industry
-    # Pinecone supports exact matches - we'll use $eq for single value
-    # Note: Pinecone metadata filters are case-sensitive, so we'll also do
-    # case-insensitive filtering in Python, but this reduces the initial result set
+    # Use $in with case variations to handle potential case mismatches
     if filter_params.industry:
-        # Use exact match - case-insensitive filtering happens in Python
-        filter_dict["industry"] = {"$eq": filter_params.industry}
+        # Generate case variations (Original, Title, Lower, Upper)
+        industry_variants = list(set([
+            filter_params.industry,
+            filter_params.industry.title(),
+            filter_params.industry.lower(),
+            filter_params.industry.upper()
+        ]))
+        filter_dict["industry"] = {"$in": industry_variants}
     
     # Metadata filtering: Use Pinecone metadata filters for location
-    # Similar to industry, use exact match for initial filtering
+    # Use $in with case variations
     if filter_params.location:
-        # Use exact match - case-insensitive filtering happens in Python
-        filter_dict["location"] = {"$eq": filter_params.location}
+        # Generate case variations
+        location_variants = list(set([
+            filter_params.location,
+            filter_params.location.title(),
+            filter_params.location.lower(),
+            filter_params.location.upper()
+        ]))
+        filter_dict["location"] = {"$in": location_variants}
     
     # Boolean filtering: Handle remote_available from Job Scout response
     # Priority: remote_available parameter > filter_params.is_remote
@@ -656,8 +711,19 @@ def build_pinecone_filter(filter_params: VacancyFilter, remote_available: Option
     # Metadata filtering: Use Pinecone metadata filters for company_stage
     # Use $in for multiple values
     # Normalize the strings to ensure they match enum values (e.g., 'SeriesA' -> 'Series A')
+    # Expand "Growth" to include Series B, Series C, and Growth
     if filter_params.company_stages:
-        normalized_stages = [CompanyStage.get_stage_value(s) for s in filter_params.company_stages]
+        expanded_stages = []
+        for stage in filter_params.company_stages:
+            normalized = CompanyStage.get_stage_value(stage)
+            if normalized == "Growth":
+                # Growth includes Series B, Series C, and Growth
+                expanded_stages.extend(["Series B", "Series C", "Growth"])
+            else:
+                expanded_stages.append(normalized)
+        
+        # Remove duplicates
+        normalized_stages = list(set(expanded_stages))
         filter_dict["company_stage"] = {"$in": normalized_stages}
     
     return filter_dict if filter_dict else None
@@ -864,20 +930,30 @@ def metadata_to_vacancy(metadata: Dict[str, Any]) -> Vacancy:
     Returns:
         Vacancy object
     """
-    # Handle company_stage - it might be a string that needs normalization
-    company_stage_str = metadata.get("company_stage", "Growth (Series B or later)")
-    try:
-        # Try to match to enum
-        company_stage = CompanyStage(company_stage_str)
-    except ValueError:
-        # Use get_stage_value to normalize, then try again
-        normalized_stage = CompanyStage.get_stage_value(company_stage_str)
-        try:
-            company_stage = CompanyStage(normalized_stage)
-        except ValueError:
-            # Default to GROWTH if no match
-            company_stage = CompanyStage.GROWTH
-            logger.warning("unknown_company_stage", stage=company_stage_str, defaulted_to="GROWTH")
+    # Handle company_stage - it might be a string, list, or dict that needs normalization
+    company_stage_raw = metadata.get("company_stage", "Growth")
+    
+    # Handle old format: stringified Python list like "[{'id': '...', 'label': '...'}]"
+    company_stage_str = str(company_stage_raw)
+    if company_stage_str.startswith("[{") and "employees" in company_stage_str:
+        # Try to extract employee count from old format
+        import re
+        employee_match = re.search(r"'label':\s*'([^']+)'", company_stage_str)
+        if employee_match:
+            company_stage_str = employee_match.group(1)
+        else:
+            # Fallback: try to extract any text with "employees"
+            employee_match = re.search(r"(\d+[-\+]?\s*employees)", company_stage_str, re.IGNORECASE)
+            if employee_match:
+                company_stage_str = employee_match.group(1)
+            else:
+                company_stage_str = "Growth"
+    
+    # Normalize using get_stage_value helper
+    normalized_stage = CompanyStage.get_stage_value(company_stage_str)
+    
+    # Use normalized stage as string (since Vacancy.company_stage is now str, not Enum)
+    company_stage = normalized_stage
     
     # Extract industry - ensure it's properly extracted from Pinecone metadata
     # This is a critical field for filtering and must be present
@@ -886,8 +962,26 @@ def metadata_to_vacancy(metadata: Dict[str, Any]) -> Vacancy:
         industry = "Technology"  # Default fallback
         logger.debug("industry_missing_in_metadata", defaulted_to="Technology")
     
-    # Extract salary_range from Pinecone metadata
+    # Extract salary_range from Pinecone metadata and clean it if it contains dicts
     salary_range = metadata.get("salary_range")
+    # Clean salary_range if it contains dict representations (e.g., "{'label': 'USD', 'value': 'USD'}")
+    if salary_range and isinstance(salary_range, str):
+        import re
+        # Check if string contains dict-like patterns
+        if "'label'" in salary_range or '"label"' in salary_range:
+            # Extract only numbers from the string
+            numbers = re.findall(r'\d+[\d,]*', salary_range)
+            if numbers:
+                # Remove commas and convert to int
+                clean_numbers = [int(n.replace(',', '')) for n in numbers if n.replace(',', '').isdigit()]
+                if len(clean_numbers) == 1:
+                    salary_range = f"${clean_numbers[0]:,}"
+                elif len(clean_numbers) >= 2:
+                    salary_range = f"${clean_numbers[0]:,} - ${clean_numbers[-1]:,}"
+                else:
+                    salary_range = None
+            else:
+                salary_range = None
     
     # Parse min_salary from salary_range if available
     # This is extracted for frontend display (Minimum Salary field)
@@ -904,23 +998,30 @@ def metadata_to_vacancy(metadata: Dict[str, Any]) -> Vacancy:
             logger.debug("min_salary_parse_failed", error=str(e), metadata_value=metadata.get("min_salary"))
             min_salary = None
     
+    # Extract all additional fields from metadata
+    category = metadata.get("category")
+    experience_level = metadata.get("experience_level")
+    employee_count = metadata.get("employee_count")
+    is_hybrid = metadata.get("is_hybrid", False)
+    
     vacancy = Vacancy(
         title=metadata.get("title", "Unknown"),
         company_name=metadata.get("company_name", "Unknown"),
         company_stage=company_stage,
         location=metadata.get("location", "Not specified"),
         industry=industry,
+        category=category,
+        experience_level=experience_level,
         salary_range=salary_range,
         description_url=metadata.get("description_url", ""),
         required_skills=metadata.get("required_skills", []),
         remote_option=metadata.get("remote_option", False),
+        is_hybrid=is_hybrid,
+        employee_count=employee_count,
         source_url=metadata.get("source_url"),
+        full_description=metadata.get("text", "") or metadata.get("full_description", ""),
+        min_salary=min_salary,
     )
-
-    # Store min_salary as an additional attribute (not in schema, but for frontend)
-    if min_salary:
-        # Add min_salary to the vacancy object as a dynamic attribute
-        vacancy.min_salary = min_salary
 
     return vacancy
 
@@ -1133,15 +1234,29 @@ async def search_vacancies(
             )
             
             # Step 2: Apply polarity filter (strict title domain matching)
+            # Only apply if role contains domain-specific keywords (frontend, backend, etc.)
+            # Skip for generic roles like "Designer", "Manager", "Engineer" without modifiers
             if filter_params.role:
-                before_polarity = len(filtered_vacancies)
-                filtered_vacancies = apply_polarity_filter(filtered_vacancies, filter_params.role)
-                logger.info(
-                    "polarity_filter_applied",
-                    before=before_polarity,
-                    after=len(filtered_vacancies),
-                    role_query=filter_params.role
-                )
+                role_lower = filter_params.role.lower()
+                # Check if role contains domain-specific keywords that need polarity filtering
+                domain_keywords_in_role = ["frontend", "backend", "mobile", "fullstack", "devops", "data"]
+                has_domain_keyword = any(keyword in role_lower for keyword in domain_keywords_in_role)
+                
+                if has_domain_keyword:
+                    before_polarity = len(filtered_vacancies)
+                    filtered_vacancies = apply_polarity_filter(filtered_vacancies, filter_params.role)
+                    logger.info(
+                        "polarity_filter_applied",
+                        before=before_polarity,
+                        after=len(filtered_vacancies),
+                        role_query=filter_params.role
+                    )
+                else:
+                    logger.info(
+                        "polarity_filter_skipped",
+                        reason="No domain-specific keywords in role",
+                        role_query=filter_params.role
+                    )
             
             # Step 3: Apply keyword match filter (required_keywords)
             if required_keywords:
@@ -1157,19 +1272,34 @@ async def search_vacancies(
             # Final count after all filters
             total_after_filters = len(filtered_vacancies)
             
+            # Remove duplicates by description_url (keep first occurrence)
+            seen_urls = set()
+            unique_vacancies = []
+            for vacancy in filtered_vacancies:
+                url = vacancy.description_url
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    unique_vacancies.append(vacancy)
+            
+            # Update count after deduplication
+            duplicates_removed = total_after_filters - len(unique_vacancies)
+            if duplicates_removed > 0:
+                logger.info("duplicates_removed", count=duplicates_removed, total_before=total_after_filters, total_after=len(unique_vacancies))
+            
             logger.info(
                 "vacancy_search_completed",
-                total_results=total_after_filters,
+                total_results=len(unique_vacancies),
                 source="pinecone",
                 initial_vector_matches=initial_vector_matches,
-                total_after_filters=total_after_filters
+                total_after_filters=len(unique_vacancies),
+                duplicates_removed=duplicates_removed
             )
             
             return VacancySearchResponse(
-                vacancies=filtered_vacancies,
+                vacancies=unique_vacancies,
                 total_in_db=None,  # Pinecone doesn't provide total DB count easily
                 initial_vector_matches=initial_vector_matches,
-                total_after_filters=total_after_filters
+                total_after_filters=len(unique_vacancies)
             )
             
         except HTTPException:
@@ -1454,7 +1584,18 @@ async def chat_search(request: ChatRequest) -> ChatResponse:
         
         # HARD FILTER: Company Stage (strict match) - removes vacancies that don't match
         if filter_params.company_stages:
-            filter_vals = [CompanyStage.get_stage_value(s) for s in filter_params.company_stages]
+            # Expand "Growth" to include Series B, Series C, and Growth
+            expanded_stages = []
+            for stage in filter_params.company_stages:
+                normalized = CompanyStage.get_stage_value(stage)
+                if normalized == "Growth":
+                    # Growth includes Series B, Series C, and Growth
+                    expanded_stages.extend(["Series B", "Series C", "Growth"])
+                else:
+                    expanded_stages.append(normalized)
+            
+            # Remove duplicates
+            filter_vals = list(set(expanded_stages))
             before_stage = len(filtered_vacancies)
             filtered_vacancies = [
                 v for v in filtered_vacancies 
@@ -1570,19 +1711,11 @@ async def chat_search(request: ChatRequest) -> ChatResponse:
             if 'industry' not in vacancy_dict or not vacancy_dict.get('industry'):
                 vacancy_dict['industry'] = vacancy.industry if hasattr(vacancy, 'industry') else "Technology"
             
-            # Salary_min: extracted from Pinecone metadata in metadata_to_vacancy()
-            if hasattr(vacancy, 'min_salary') and vacancy.min_salary is not None:
-                vacancy_dict['min_salary'] = vacancy.min_salary
-            elif vacancy_dict.get('salary_range'):
-                # Parse min_salary from salary_range if not already set
-                min_salary = parse_min_salary_from_range(vacancy_dict.get('salary_range'))
-                if min_salary:
-                    vacancy_dict['min_salary'] = min_salary
-                else:
-                    vacancy_dict['min_salary'] = None
-            else:
-                # Explicitly set to None if not available
-                vacancy_dict['min_salary'] = None
+            # Salary_min: already extracted in metadata_to_vacancy and included in model_dump
+            # Just ensure it's present if for some reason it's missing (though it shouldn't be)
+            if 'min_salary' not in vacancy_dict:
+                vacancy_dict['min_salary'] = vacancy.min_salary if hasattr(vacancy, 'min_salary') else None
+
             
             # Company_stage: extracted from Pinecone metadata in metadata_to_vacancy()
             # This should already be present, but ensure it's correctly mapped
@@ -1796,9 +1929,29 @@ Description URL: {vacancy_dict.get('description_url', 'N/A')}
                 else:
                     return -1.0  # No score, sort to end
             
-            # Sort all vacancies by score (descending)
-            vacancies_response.sort(key=sort_key, reverse=True)
-            logger.info("vacancies_sorted_by_score", final_count=len(vacancies_response))
+        # Remove duplicates by description_url before sorting (keep highest score)
+        url_to_best = {}
+        for v in vacancies_response:
+            url = v.get('description_url', '')
+            if url:
+                if url not in url_to_best:
+                    url_to_best[url] = v
+                else:
+                    # Keep the one with higher score
+                    current_score = v.get('score', 0) or 0
+                    existing_score = url_to_best[url].get('score', 0) or 0
+                    if current_score > existing_score:
+                        url_to_best[url] = v
+        
+        # Convert back to list
+        vacancies_response = list(url_to_best.values())
+        duplicates_removed = len(vacancies_response) - len(url_to_best)
+        if duplicates_removed > 0:
+            logger.info("chat_duplicates_removed", count=duplicates_removed, total_before=len(vacancies_response) + duplicates_removed, total_after=len(vacancies_response))
+        
+        # Sort all vacancies by score (descending)
+        vacancies_response.sort(key=sort_key, reverse=True)
+        logger.info("vacancies_sorted_by_score", final_count=len(vacancies_response))
         
         # Generate AI summary of results using the top vacancies
         # Convert dicts back to Vacancy objects for the summary function

@@ -1159,7 +1159,32 @@ class A16ZScraper(BaseScraper):
                     for item in val:
                         if isinstance(item, dict):
                             # Filter out dictionaries like {'label': 'USD', 'value': 'USD'}
-                            continue
+                            # Check if it's a label dict (label == value and no numeric value)
+                            if 'label' in item and 'value' in item:
+                                # Check if value is numeric
+                                value = item.get('value')
+                                if isinstance(value, (int, float)):
+                                    numbers.append(int(value))
+                                elif isinstance(value, str) and re.search(r'\d', value):
+                                    # Extract number from string value
+                                    matches = re.findall(r'\d+[\d,]*', value)
+                                    for match in matches:
+                                        num_str = match.replace(',', '')
+                                        try:
+                                            numbers.append(int(num_str))
+                                        except ValueError:
+                                            continue
+                                # If label == value and no numbers, skip it (e.g., {'label': 'USD', 'value': 'USD'})
+                                elif item.get('label') == item.get('value') and not re.search(r'\d', str(value)):
+                                    continue
+                            # Try to extract min/max from dict
+                            else:
+                                min_val = item.get("minValue") or item.get("min") or item.get("minSalary")
+                                max_val = item.get("maxValue") or item.get("max") or item.get("maxSalary")
+                                if min_val:
+                                    numbers.append(int(min_val) if isinstance(min_val, (int, float)) else int(str(min_val).replace(',', '')))
+                                if max_val:
+                                    numbers.append(int(max_val) if isinstance(max_val, (int, float)) else int(str(max_val).replace(',', '')))
                         elif isinstance(item, (int, float)):
                             numbers.append(int(item))
                         elif isinstance(item, str):

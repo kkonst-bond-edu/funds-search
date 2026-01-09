@@ -827,6 +827,17 @@ class IngestManager:
             # Filter out None values as Pinecone doesn't accept null
             metadata = {k: v for k, v in metadata.items() if v is not None}
             
+            # Check for duplicates by description_url before upserting
+            existing_id = self.vector_store.check_duplicate_by_url(vacancy.description_url, namespace=namespace)
+            if existing_id:
+                if existing_id != vacancy_id:
+                    # Different ID but same URL - delete the old one and use the new ID
+                    logger.warning(f"Duplicate found for URL {vacancy.description_url}: existing_id={existing_id}, new_id={vacancy_id}. Deleting old entry.")
+                    self.vector_store.delete_by_ids([existing_id], namespace=namespace)
+                else:
+                    # Same ID - this is an update, which is fine
+                    logger.info(f"Updating existing vacancy: {vacancy_id}")
+            
             # Prepare vector for Pinecone
             vector = {
                 "id": vacancy_id,

@@ -194,3 +194,50 @@ class VectorStore:
         )
         # Return results without 'id' field for backward compatibility
         return [{"metadata": r["metadata"], "score": r["score"]} for r in results]
+    
+    def check_duplicate_by_url(self, description_url: str, namespace: str = "vacancies") -> Optional[str]:
+        """
+        Check if a vacancy with the given description_url already exists in Pinecone.
+        
+        Args:
+            description_url: URL to check for duplicates
+            namespace: Pinecone namespace
+            
+        Returns:
+            Vector ID if duplicate found, None otherwise
+        """
+        try:
+            # Use a dummy vector with filter to find by description_url
+            dummy_vector = [0.0] * 1024  # BGE-M3 uses 1024 dimensions
+            query_result = self.index.query(
+                vector=dummy_vector,
+                top_k=1,
+                include_metadata=True,
+                filter={"description_url": {"$eq": description_url}},
+                namespace=namespace
+            )
+            
+            if query_result.matches:
+                return query_result.matches[0].id
+            return None
+        except Exception as e:
+            logger.warning(f"Error checking for duplicate: {e}")
+            return None
+    
+    def delete_by_ids(self, ids: List[str], namespace: str = "vacancies"):
+        """
+        Delete vectors by their IDs.
+        
+        Args:
+            ids: List of vector IDs to delete
+            namespace: Pinecone namespace
+        """
+        if not ids:
+            return
+        
+        try:
+            self.index.delete(ids=ids, namespace=namespace)
+            logger.info(f"Deleted {len(ids)} vectors from namespace: {namespace}")
+        except Exception as e:
+            logger.error(f"Error deleting vectors: {e}")
+            raise
