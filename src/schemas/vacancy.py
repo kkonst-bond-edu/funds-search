@@ -138,6 +138,7 @@ class Vacancy(BaseModel):
     remote_option: bool = Field(False, description="Whether remote work is available")
     is_hybrid: bool = Field(False, description="Whether the role is hybrid")
     salary_range: Optional[str] = Field(None, description="Salary range (e.g., '$120k-$180k')")
+    min_salary: Optional[int] = Field(None, description="Minimum salary extracted from salary_range or metadata")
     description_url: str = Field(..., description="URL to full job description")
     required_skills: List[str] = Field(default_factory=list, description="Required skills list")
     employee_count: Optional[str] = Field(None, description="Company employee count")
