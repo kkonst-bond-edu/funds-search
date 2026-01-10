@@ -726,12 +726,7 @@ def display_vacancy_card(vacancy: dict, index: int):
          score_html = '<div style="text-align: right; font-size: 12px; color: #666;">Upload CV for match</div>'
     elif current_score is not None:
         color = "#22c55e" if current_score >= 80 else "#eab308" if current_score >= 50 else "#ef4444"
-        score_html = f"""
-        <div style="text-align: right;">
-            <div style="font-size: 24px; font-weight: 700; color: {color};">{int(current_score)}%</div>
-            <div style="font-size: 11px; color: #666;">Match</div>
-        </div>
-        """
+        score_html = f'<div style="text-align: right;"><div style="font-size: 24px; font-weight: 700; color: {color};">{int(current_score)}%</div><div style="font-size: 11px; color: #666;">Match</div></div>'
     
     # Tags HTML
     tags_html = ""
@@ -781,35 +776,38 @@ def display_vacancy_card(vacancy: dict, index: int):
         
     row2_html = " • ".join(row2_items)
 
-    card_html = f"""
-    <div class="vacancy-card">
-        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-            <div style="flex-grow: 1;">
-                <div class="company-name">{company_name}</div>
-                <div class="vacancy-title">{title}</div>
-                
-                <div class="salary-loc-row">
-                    {meta_html}
-                </div>
-                
-                <div class="secondary-meta">
-                    {row2_html}
-                </div>
-            </div>
-            {score_html}
-        </div>
+    # Build conditional HTML sections
+    sections_html = ""
+    if tags_html:
+        sections_html += f'<div class="tags-row">{tags_html}</div>'
+    if profile_summary:
+        sections_html += f'<div class="summary-text">{profile_summary}</div>'
+    if signals_html:
+        sections_html += f'<div style="margin-bottom: 16px;">{signals_html}</div>'
+    
+    # Conditional wrappers for meta sections
+    meta_section = f'<div class="salary-loc-row">{meta_html}</div>' if meta_html else ""
+    secondary_meta_section = f'<div class="secondary-meta">{row2_html}</div>' if row2_html else ""
 
-        {f'<div class="tags-row">{tags_html}</div>' if tags_html else ''}
-        
-        {f'<div class="summary-text">{profile_summary}</div>' if profile_summary else ''}
-        
-        {f'<div style="margin-bottom: 16px;">{signals_html}</div>' if signals_html else ''}
-
-        <a href="{description_url}" target="_blank" class="apply-btn">
-            <span>→</span> Apply
-        </a>
-    </div>
-    """
+    # Build card HTML as a single line to avoid Markdown parsing issues with newlines
+    html_parts = []
+    html_parts.append('<div class="vacancy-card">')
+    html_parts.append('<div style="display: flex; justify-content: space-between; align-items: flex-start;">')
+    html_parts.append('<div style="flex-grow: 1;">')
+    html_parts.append(f'<div class="company-name">{company_name}</div>')
+    html_parts.append(f'<div class="vacancy-title">{title}</div>')
+    html_parts.append(meta_section)
+    html_parts.append(secondary_meta_section)
+    html_parts.append('</div>') # Close Left Column
+    html_parts.append(score_html)
+    html_parts.append('</div>') # Close Header Flex Row
+    html_parts.append(sections_html)
+    html_parts.append('<div style="margin-top: 12px; display: flex; justify-content: flex-end;">')
+    html_parts.append(f'<a href="{description_url}" target="_blank" class="apply-btn"><span>→</span> Apply</a>')
+    html_parts.append('</div>')
+    html_parts.append('</div>') # Close vacancy-card
+    
+    card_html = "".join(html_parts)
     
     st.markdown(card_html, unsafe_allow_html=True)
     
