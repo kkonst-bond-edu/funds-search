@@ -27,3 +27,7 @@ tenacity>=8.2.0
 
 # Configuration
 pyyaml>=6.0.0
+
+# Azure Blob Storage for HTML archiving
+azure-storage-blob>=12.19.0
+azure-identity>=1.15.0

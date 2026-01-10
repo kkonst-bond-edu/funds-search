@@ -27,13 +27,22 @@ jobs:
 
       - name: Run Scraper
         env:
-          # Сюда прописываем все твои API ключи
+          # API ключи для LLM и векторной БД
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
           PINECONE_ENVIRONMENT: ${{ secrets.PINECONE_ENVIRONMENT }}
           PINECONE_INDEX_NAME: ${{ secrets.PINECONE_INDEX_NAME }}
           AZURE_EMBEDDING_ENDPOINT: ${{ secrets.AZURE_EMBEDDING_ENDPOINT }}
-          # Если есть другие переменные из .env, добавь их сюда
+          
+          # Azure Blob Storage для хранения HTML (Service Principal метод)
+          AZURE_STORAGE_ACCOUNT_NAME: ${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }}
+          AZURE_STORAGE_CONTAINER_NAME: ${{ secrets.AZURE_STORAGE_CONTAINER_NAME }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          
+          # Альтернативный метод (Connection String) - используется если AZURE_STORAGE_ACCOUNT_NAME не задан
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
         run: python -m src.services.scraper.main
 
       - name: Commit and push changes

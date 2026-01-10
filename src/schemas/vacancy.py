@@ -146,6 +146,7 @@ class Vacancy(BaseModel):
     required_skills: List[str] = Field(default_factory=list, description="Required skills list")
     employee_count: Optional[str] = Field(None, description="Company employee count")
     full_description: str = Field(..., description="Full job description for vector search")
+    raw_html_url: Optional[str] = Field(None, description="URL to raw HTML file in Azure Blob Storage")
 
     class Config:
         """Pydantic configuration."""

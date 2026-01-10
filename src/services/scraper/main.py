@@ -17,6 +17,9 @@ from src.services.scraper.core.ingest_manager import IngestManager
 from src.services.scraper.providers.a16z import A16ZScraper
 from src.schemas.vacancy import Vacancy
 
+# Maximum number of vacancies to process per run
+MAX_PROCESS_PER_RUN = 300
+
 # Configure basic logger for console output
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -78,12 +81,16 @@ def get_existing_urls(vacancies: List[dict]) -> Set[str]:
 
 def append_vacancy_to_dump(vacancy: Vacancy, dump_path: Path) -> None:
     """
-    Append a single vacancy to vacancies_dump.json.
+    Atomically append a single vacancy to vacancies_dump.json.
+    Uses atomic write (write to temp file, then rename) to prevent data loss on crash.
     
     Args:
         vacancy: Vacancy object to append
         dump_path: Path to vacancies_dump.json file
     """
+    import tempfile
+    import shutil
+    
     # Load existing vacancies
     existing_vacancies = load_existing_vacancies(dump_path)
     
@@ -93,11 +100,19 @@ def append_vacancy_to_dump(vacancy: Vacancy, dump_path: Path) -> None:
     # Append to list
     existing_vacancies.append(vacancy_dict)
     
-    # Save back to file
-    with open(dump_path, "w", encoding="utf-8") as f:
-        json.dump(existing_vacancies, f, indent=2, ensure_ascii=False)
-    
-    logger.info(f"Appended vacancy to {dump_path}: {vacancy.title} at {vacancy.company_name}")
+    # Atomic write: write to temp file first, then rename
+    temp_file = dump_path.with_suffix('.tmp')
+    try:
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(existing_vacancies, f, indent=2, ensure_ascii=False)
+        # Atomic rename (works on Unix and Windows)
+        temp_file.replace(dump_path)
+        logger.info(f"Atomically appended vacancy to {dump_path}: {vacancy.title} at {vacancy.company_name}")
+    except Exception as e:
+        # Clean up temp file on error
+        if temp_file.exists():
+            temp_file.unlink()
+        raise
 
 
 async def process_vacancy(
@@ -163,14 +178,15 @@ async def _process_vacancy_internal(
         stats: Dictionary with counters
         lock: Lock for thread-safe access
     """
-    # Check if this vacancy is already processed (thread-safe)
+    # FIRST: Check if this vacancy is already processed in vacancies_dump.json (thread-safe)
+    # This prevents re-processing if script was interrupted and restarted
     async with lock:
         if link in existing_urls:
             stats["skipped_count"] += 1
             logger.info(f"Skipping already processed vacancy: {link}")
             return
     
-    # Extract vacancy details
+    # Extract vacancy details (only if not already processed)
     try:
         vacancy = await a16z_scraper.extract_details(link)
     except Exception as e:
@@ -212,14 +228,16 @@ async def _process_vacancy_internal(
             exc_info=True,
         )
     
-    # AFTER AI classification: Save the updated vacancy to vacancies_dump.json
-    # The vacancy object now includes AI-classified fields (category, industry, experience_level, required_skills, etc.)
+    # IMMEDIATELY AFTER successful extraction: Save vacancy to vacancies_dump.json atomically
+    # This ensures progress is saved even if Pinecone upload fails later
+    # The vacancy object includes all extracted fields (raw_html_url, etc.)
     try:
         # Use lock to ensure thread-safe file writing
         async with lock:
             append_vacancy_to_dump(vacancy, dump_path)
             # Update existing_urls to prevent duplicates in the same run
             existing_urls.add(vacancy.description_url)
+            logger.info(f"Saved vacancy to dump (atomic write): {vacancy.title} at {vacancy.company_name}")
     except Exception as e:
         logger.error(
             f"Failed to save vacancy to dump: {vacancy.title} - {str(e)}",
@@ -268,15 +286,19 @@ async def main() -> None:
             # Get all links first
             logger.info("Fetching all job links")
             all_links = await a16z_scraper.fetch_all_links()
-            logger.info(f"Found {len(all_links)} job links to process")
+            logger.info(f"Found {len(all_links)} job links total")
             
-            # Limit to first 50 jobs for testing
-            all_links = all_links[:]
-            logger.info(f"Processing first {len(all_links)} jobs for testing")
-            
-            # Filter out already processed links
+            # FIRST: Filter out already processed links (check vacancies_dump.json)
+            # This prevents re-processing if script was interrupted and restarted
             links_to_process = [link for link in all_links if link not in existing_urls]
-            logger.info(f"Processing {len(links_to_process)} new vacancies (skipping {len(all_links) - len(links_to_process)} already processed)")
+            logger.info(f"Found {len(links_to_process)} new vacancies to process (skipping {len(all_links) - len(links_to_process)} already processed)")
+            
+            # Limit to MAX_PROCESS_PER_RUN to process in batches
+            if len(links_to_process) > MAX_PROCESS_PER_RUN:
+                logger.info(f"Limiting processing to {MAX_PROCESS_PER_RUN} vacancies per run (found {len(links_to_process)} total)")
+                links_to_process = links_to_process[:MAX_PROCESS_PER_RUN]
+            
+            logger.info(f"Will process {len(links_to_process)} vacancies in this run")
             
             # Initialize semaphore to limit concurrent browser pages (3 concurrent)
             # Reduced to 3 to reduce load on embedding service and prevent timeouts

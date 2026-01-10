@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 
 from src.schemas.vacancy import Vacancy, CompanyStage
 from src.services.scraper.core.base import BaseScraper
+from src.services.scraper.core.azure_storage import upload_html_to_azure_blob
 
 # Configure basic logger for console output
 logger = logging.getLogger(__name__)
@@ -299,44 +300,24 @@ def extract_quality_description(soup: BeautifulSoup) -> str:
     return soup.get_text(separator="\n", strip=True)
 
 
-def save_raw_html(fund_name: str, url: str, html_content: str) -> Path:
+def save_raw_html(fund_name: str, url: str, html_content: str) -> Optional[str]:
     """
-    Save raw HTML content to storage directory.
+    Upload raw HTML content to Azure Blob Storage.
     
     Args:
         fund_name: Name of the fund (e.g., "a16z")
         url: URL of the scraped page
-        html_content: Raw HTML content to save
+        html_content: Raw HTML content to upload
         
     Returns:
-        Path to the saved HTML file
+        URL to the uploaded blob in Azure Blob Storage, or None if upload failed
     """
-    # Get project root
-    project_root = Path(__file__).parent.parent.parent.parent.parent
-    
-    # Extract job ID from URL
-    # URLs are like: https://jobs.a16z.com/jobs/{job_id}
-    parsed_url = urlparse(url)
-    path_parts = parsed_url.path.strip("/").split("/")
-    job_id = path_parts[-1] if path_parts else "unknown"
-    
-    # Sanitize job_id for filename
-    job_id = re.sub(r'[^\w\-_]', '_', job_id)
-    
-    # Create date-based directory structure
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    storage_dir = project_root / "storage" / "raw_scrapes" / fund_name / date_str
-    
-    # Create directories if they don't exist
-    storage_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Save HTML file
-    html_file = storage_dir / f"{job_id}.html"
-    with open(html_file, "w", encoding="utf-8") as f:
-        f.write(html_content)
-    
-    logger.info(f"Saved raw HTML to: {html_file}")
-    return html_file
+    blob_url = upload_html_to_azure_blob(fund_name, url, html_content)
+    if blob_url:
+        logger.info(f"Uploaded raw HTML to Azure Blob Storage: {blob_url}")
+    else:
+        logger.warning(f"Failed to upload HTML to Azure Blob Storage for: {url}")
+    return blob_url
 
 
 class A16ZScraper(BaseScraper):
@@ -644,8 +625,8 @@ class A16ZScraper(BaseScraper):
             # Get raw HTML content
             html_content = await page.content()
             
-            # Save HTML backup
-            save_raw_html("a16z", url, html_content)
+            # Upload HTML to Azure Blob Storage
+            raw_html_url = save_raw_html("a16z", url, html_content)
             
             # Parse HTML with BeautifulSoup
             soup = BeautifulSoup(html_content, "html.parser")
@@ -1360,6 +1341,7 @@ class A16ZScraper(BaseScraper):
                 required_skills=required_skills,  # ONLY from cached data (tags, categories, departments)
                 full_description=description,  # May be "Parsing Error" but other fields still enriched
                 employee_count=employee_count, # New field
+                raw_html_url=raw_html_url,  # URL to HTML in Azure Blob Storage
             )
             
             # Set temporary is_hybrid attribute
