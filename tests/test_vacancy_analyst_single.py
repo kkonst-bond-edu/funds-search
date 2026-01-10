@@ -1,5 +1,5 @@
 """
-Test script to verify ClassificationAgent with a single vacancy.
+Test script to verify VacancyAnalyst with a single vacancy.
 
 Usage:
     python tests/test_classification_single.py
@@ -18,7 +18,7 @@ project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from apps.orchestrator.agents.classification import ClassificationAgent
+from apps.orchestrator.agents.vacancy_analyst import VacancyAnalyst
 
 
 async def test_classification(title: str, description: str):
@@ -30,7 +30,7 @@ async def test_classification(title: str, description: str):
         description: Job vacancy description
     """
     print("=" * 60)
-    print("ClassificationAgent Test")
+    print("VacancyAnalyst Test")
     print("=" * 60)
     print(f"\nTitle: {title}")
     print(f"\nDescription:\n{description}")
@@ -40,7 +40,7 @@ async def test_classification(title: str, description: str):
     
     try:
         # Initialize the classification agent
-        classifier = ClassificationAgent()
+        classifier = VacancyAnalyst()
         
         # Classify the vacancy
         result = await classifier.classify(title, description)

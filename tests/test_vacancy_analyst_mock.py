@@ -1,7 +1,7 @@
 """
-Test script to verify ClassificationAgent with a mock vacancy.
+Test script to verify VacancyAnalyst with a mock vacancy.
 
-This script tests the classification agent with a specific mock vacancy
+This script tests the vacancy analyst agent with a specific mock vacancy
 and verifies that the classification returns valid (non-default) values.
 """
 
@@ -16,7 +16,7 @@ project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from apps.orchestrator.agents.classification import ClassificationAgent
+from apps.orchestrator.agents.vacancy_analyst import VacancyAnalyst
 
 
 async def test_classification():
@@ -28,7 +28,7 @@ async def test_classification():
     description = "We are looking for a Python expert to build scalable AI infrastructure using Kubernetes and AWS. Experience with FastAPI and PostgreSQL is required."
     
     print("=" * 70)
-    print("ClassificationAgent Test - Mock Vacancy")
+    print("VacancyAnalyst Test - Mock Vacancy")
     print("=" * 70)
     print(f"\nTitle: {title}")
     print(f"\nDescription: {description}")
@@ -41,13 +41,13 @@ async def test_classification():
     print("✓ Environment variables loaded\n")
     
     print("-" * 70)
-    print("Initializing ClassificationAgent...")
+    print("Initializing VacancyAnalyst...")
     print("-" * 70)
     
     try:
         # Initialize the classification agent
-        agent = ClassificationAgent()
-        print("✓ ClassificationAgent initialized successfully\n")
+        agent = VacancyAnalyst()
+        print("✓ VacancyAnalyst initialized successfully\n")
         
         print("-" * 70)
         print("Running classification...")

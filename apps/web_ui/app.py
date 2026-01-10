@@ -75,6 +75,105 @@ st.markdown(
         margin-top: 0.5rem;
         line-height: 1.6;
     }
+    /* Vacancy Card Styles */
+    .vacancy-card {
+        background-color: white;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 24px;
+        margin-bottom: 16px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        transition: box-shadow 0.2s ease;
+    }
+    .vacancy-card:hover {
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        border-color: #d1d5db;
+    }
+    .company-name {
+        font-size: 14px;
+        font-weight: 600;
+        color: #4b5563;
+        margin-bottom: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .vacancy-title {
+        font-size: 22px;
+        font-weight: 700;
+        color: #111827;
+        margin-bottom: 12px;
+        line-height: 1.3;
+    }
+    .salary-loc-row {
+        display: flex;
+        gap: 24px;
+        align-items: center;
+        margin-bottom: 8px;
+        color: #374151;
+        font-size: 15px;
+        font-weight: 500;
+    }
+    .meta-item {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .secondary-meta {
+        font-size: 14px;
+        color: #6b7280;
+        margin-bottom: 16px;
+    }
+    .tags-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 16px;
+    }
+    .tech-tag {
+        background-color: white;
+        border: 1px solid #d1d5db;
+        border-radius: 4px;
+        padding: 4px 10px;
+        font-size: 13px;
+        color: #374151;
+        font-weight: 500;
+    }
+    .signal-tag {
+        background-color: #f3f4f6;
+        border-radius: 4px;
+        padding: 4px 10px;
+        font-size: 13px;
+        color: #1f2937;
+        font-weight: 500;
+        display: inline-block;
+        margin-right: 8px;
+        margin-bottom: 8px;
+    }
+    .summary-text {
+        font-size: 14px;
+        color: #4b5563;
+        margin-bottom: 20px;
+        line-height: 1.6;
+        background-color: #f9fafb;
+        padding: 12px;
+        border-radius: 6px;
+    }
+    .apply-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background-color: white;
+        color: #0f172a;
+        font-weight: 600;
+        font-size: 14px;
+        text-decoration: none;
+        padding: 0;
+    }
+    .apply-btn:hover {
+        text-decoration: underline;
+        color: #2563eb;
+    }
     </style>
 """,
     unsafe_allow_html=True,
@@ -526,11 +625,7 @@ def render_score_badges(pinecone_score: Optional[float], score: Optional[float] 
 
 def display_vacancy_card(vacancy: dict, index: int):
     """
-    Display a vacancy card in the chat interface with improved UX layout.
-
-    Args:
-        vacancy: Vacancy dictionary from API response
-        index: Index of the vacancy (for ranking)
+    Display a vacancy card in the chat interface with a design similar to Shield AI / Compact Layout.
     """
     # Handle both dict and Pydantic model
     if hasattr(vacancy, 'dict'):
@@ -538,191 +633,190 @@ def display_vacancy_card(vacancy: dict, index: int):
     elif hasattr(vacancy, 'model_dump'):
         vacancy = vacancy.model_dump()
 
-    # Extract fields - include all fields from Vacancy schema
+    # Helper for safe nested access
+    def get_nested(d, path, default=None):
+        keys = path.split('.')
+        current = d
+        for k in keys:
+            if isinstance(current, dict):
+                current = current.get(k)
+            elif hasattr(current, k):
+                current = getattr(current, k)
+            else:
+                return default
+            if current is None:
+                return default
+        return current
+
+    # Extract fields
     title = vacancy.get("title", "Unknown")
     company_name = vacancy.get("company_name", "Unknown")
     company_stage = vacancy.get("company_stage", "Unknown")
     if hasattr(company_stage, 'value'):
         company_stage = company_stage.value
+    
+    # Normalize stage string if needed (e.g. "Growth (Series B...)" -> "Growth")
+    if company_stage and "growth" in company_stage.lower():
+        company_stage = "Growth"
+        
     location = vacancy.get("location", "Not specified")
-    industry = vacancy.get("industry", "Technology")
     category = vacancy.get("category")
-    experience_level = vacancy.get("experience_level")
-    salary_range = vacancy.get("salary_range")
-    min_salary = vacancy.get("min_salary")
+    industry = vacancy.get("industry")
     employee_count = vacancy.get("employee_count")
-    description_url = vacancy.get("description_url", "")
-    required_skills = vacancy.get("required_skills", [])
-    remote_option = vacancy.get("remote_option", False)
-    is_hybrid = vacancy.get("is_hybrid", False)
-    match_reason = vacancy.get("match_reason")  # AI match reasoning from MatchmakerAgent (new field name)
-    match_reasoning = vacancy.get("match_reasoning") or match_reason  # Fallback to old field name for compatibility
-    ai_insight = vacancy.get("ai_insight") or match_reasoning or match_reason  # AI insight from MatchmakerAgent
-    pinecone_score = vacancy.get("pinecone_score")  # Pinecone similarity score (0.0 to 1.0)
-    ai_match_score = vacancy.get("ai_match_score")  # AI match score (0-10 scale, for backward compatibility)
-    score = vacancy.get("score")  # AI match score (0-100 scale) - primary score field
+    
+    # Experience logic
+    experience_years = get_nested(vacancy, "extracted.role.experience_years_min")
+    experience_level = vacancy.get("experience_level")
+    experience_display = f"{experience_years}+ years" if experience_years is not None else experience_level
 
-    # Layout Structure: Use st.container(border=True) for each vacancy card
-    with st.container(border=True):
-        # Card header: Use st.columns([3, 1]) - left: Job Title + Company, right: AI Match Score
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            st.markdown(f"### 💼 {title}")
-            st.markdown(f"**{company_name}**")
-        
-        with col2:
-            # Display large, clean AI Match Score (remove duplicates - this is the only one)
-            current_score = score if score is not None else (ai_match_score * 10 if ai_match_score is not None else None)
-            # Check if persona is missing - show "Resume Required" badge ONLY in AI Recruiter tab (not Manual Search)
-            # Manual Search results don't have persona_applied field, so we check if it's missing
-            has_persona = st.session_state.get("persona") is not None
-            persona_applied = vacancy.get("persona_applied", False)
-            # Manual Search doesn't include persona_applied field, so if it's missing or False and no score, it's Manual Search
-            is_manual_search = "persona_applied" not in vacancy or (not persona_applied and score is None and ai_match_score is None)
-            
-            # Only show "Resume Required" in AI Recruiter tab, not in Manual Search
-            if not is_manual_search and (not has_persona or not persona_applied):
-                # Show greyed-out "Resume Required" badge when CV is missing (only in AI Recruiter)
-                st.markdown(
-                    '<div style="text-align: center; padding: 1rem;">'
-                    '<div style="font-size: 1.25rem; font-weight: bold; color: #999; background-color: #f3f4f6; padding: 0.5rem; border-radius: 0.5rem;">Resume Required</div>'
-                    '<div style="font-size: 0.75rem; color: #999; margin-top: 0.25rem;">Upload CV to match</div>'
-                    '</div>',
-                    unsafe_allow_html=True
-                )
-            # Check if score is 0 but analysis exists and persona is present - show "Analyzing..." instead
-            elif not is_manual_search and current_score == 0 and ai_insight and has_persona:
-                st.markdown(
-                    '<div style="text-align: center; padding: 1rem;">'
-                    '<div style="font-size: 1.5rem; font-weight: bold; color: #666;">Analyzing...</div>'
-                    '<div style="font-size: 0.875rem; color: #999; margin-top: 0.25rem;">AI Match</div>'
-                    '</div>',
-                    unsafe_allow_html=True
-                )
-            elif current_score is not None:
-                # Determine color based on score
-                if current_score >= 80:
-                    score_color = "#22c55e"  # Green
-                elif current_score >= 50:
-                    score_color = "#eab308"  # Yellow
+    # Salary logic
+    salary_range = vacancy.get("salary_range")
+    normalization_warnings = vacancy.get("normalization_warnings", [])
+    if normalization_warnings:
+        salary_range = None
+    
+    # Clean salary display
+    if salary_range:
+        import re
+        if isinstance(salary_range, str) and ("'label'" in salary_range or '"label"' in salary_range):
+            numbers = re.findall(r'\d+[\d,]*', salary_range)
+            if numbers:
+                clean_numbers = [int(n.replace(',', '')) for n in numbers if n.replace(',', '').isdigit()]
+                if len(clean_numbers) == 1:
+                    salary_range = f"${clean_numbers[0]:,}"
+                elif len(clean_numbers) >= 2:
+                    salary_range = f"${clean_numbers[0]:,} - ${clean_numbers[-1]:,}"
                 else:
-                    score_color = "#ef4444"  # Red
+                    salary_range = None
+
+    # Profile Summary
+    profile_summary = get_nested(vacancy, "ai_ready_views.role_profile_text")
+    
+    # Tech Stack
+    tech_stack = get_nested(vacancy, "extracted.role.tech_stack", [])
+    if tech_stack:
+        tech_stack = [t for t in tech_stack if t.lower() not in ["maintenance", "other", "n/a"]]
+
+    # Extended Fields
+    go_to_market = get_nested(vacancy, "extracted.company.go_to_market")
+    product_type = get_nested(vacancy, "extracted.company.product_type")
+    
+    # Signals
+    has_equity = get_nested(vacancy, "extracted.offer.equity", False)
+    is_customer_facing = get_nested(vacancy, "extracted.role.customer_facing", False)
+    culture_signals = get_nested(vacancy, "extracted.company.culture_signals", [])
+
+    description_url = vacancy.get("description_url", "")
+    
+    # Scores
+    score = vacancy.get("score")
+    ai_match_score = vacancy.get("ai_match_score")
+    current_score = score if score is not None else (ai_match_score * 10 if ai_match_score is not None else None)
+    ai_insight = vacancy.get("ai_insight") or vacancy.get("match_reasoning") or vacancy.get("match_reason")
+
+    # --- HTML Construction ---
+    
+    # Score Badge
+    score_html = ""
+    has_persona = st.session_state.get("persona") is not None
+    persona_applied = vacancy.get("persona_applied", False)
+    is_manual_search = "persona_applied" not in vacancy or (not persona_applied and score is None and ai_match_score is None)
+
+    if not is_manual_search and (not has_persona or not persona_applied):
+         score_html = '<div style="text-align: right; font-size: 12px; color: #666;">Upload CV for match</div>'
+    elif current_score is not None:
+        color = "#22c55e" if current_score >= 80 else "#eab308" if current_score >= 50 else "#ef4444"
+        score_html = f"""
+        <div style="text-align: right;">
+            <div style="font-size: 24px; font-weight: 700; color: {color};">{int(current_score)}%</div>
+            <div style="font-size: 11px; color: #666;">Match</div>
+        </div>
+        """
+    
+    # Tags HTML
+    tags_html = ""
+    if tech_stack:
+        for tag in tech_stack[:8]: # Limit to 8 tags
+            tags_html += f'<span class="tech-tag">{tag}</span>'
+    
+    # Signals HTML
+    signals_list = []
+    if has_equity:
+        signals_list.append('<span class="signal-tag">💎 Equity</span>')
+    if is_customer_facing:
+        signals_list.append('<span class="signal-tag">👤 Customer Facing</span>')
+    if product_type:
+        signals_list.append(f'<span class="signal-tag">🚀 {product_type}</span>')
+    if culture_signals:
+        for cs in culture_signals[:3]:
+             signals_list.append(f'<span class="signal-tag" style="background-color: #f0fdf4; color: #166534;">{cs}</span>')
+    
+    signals_html = "".join(signals_list)
+
+    # Meta Items
+    meta_html = ""
+    
+    # Salary Line
+    if salary_range:
+        meta_html += f'<div class="meta-item"><span style="font-size:16px">💰</span> {salary_range} / year</div>'
+    
+    # Location
+    if location and location != "Not specified":
+        loc_parts = location.split(',')
+        clean_loc = ", ".join([p.strip() for p in loc_parts[:2]])
+        meta_html += f'<div class="meta-item"><span style="font-size:16px">📍</span> {clean_loc}</div>'
+    
+    # Row 2 Meta (Industry, Stage, Employees)
+    row2_items = []
+    if category:
+        row2_items.append(category)
+    if industry:
+        row2_items.append(industry)
+    if company_stage and company_stage != "Unknown":
+        row2_items.append(company_stage)
+    if employee_count:
+        row2_items.append(employee_count)
+    if experience_display:
+        row2_items.append(experience_display)
+        
+    row2_html = " • ".join(row2_items)
+
+    card_html = f"""
+    <div class="vacancy-card">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <div style="flex-grow: 1;">
+                <div class="company-name">{company_name}</div>
+                <div class="vacancy-title">{title}</div>
                 
-                st.markdown(
-                    f'<div style="text-align: center; padding: 1rem;">'
-                    f'<div style="font-size: 2.5rem; font-weight: bold; color: {score_color};">{int(current_score)}%</div>'
-                    f'<div style="font-size: 0.875rem; color: #666; margin-top: 0.25rem;">AI Match</div>'
-                    f'</div>',
-                    unsafe_allow_html=True
-                )
-            # Don't show anything if no score (Manual Search doesn't need score display)
+                <div class="salary-loc-row">
+                    {meta_html}
+                </div>
+                
+                <div class="secondary-meta">
+                    {row2_html}
+                </div>
+            </div>
+            {score_html}
+        </div>
+
+        {f'<div class="tags-row">{tags_html}</div>' if tags_html else ''}
         
-        st.markdown("---")
+        {f'<div class="summary-text">{profile_summary}</div>' if profile_summary else ''}
         
-        # Metadata Clean-up: Display Location, Industry, Company Stage, Employee Count as clean tags
-        metadata_tags = []
-        if location and location != "Not specified":
-            metadata_tags.append(f"📍 {location}")
-        if industry:
-            metadata_tags.append(f"🏢 {industry}")
-        if company_stage and company_stage != "Unknown":
-            metadata_tags.append(f"📈 {company_stage}")
-        if employee_count:
-            metadata_tags.append(f"👥 {employee_count}")
-        if remote_option:
-            metadata_tags.append("🌐 Remote")
-        if is_hybrid:
-            metadata_tags.append("🔄 Hybrid")
-        
-        if metadata_tags:
-            tags_html = " • ".join(metadata_tags)
-            st.markdown(f'<div style="margin-bottom: 1rem; color: #555; font-size: 0.9rem;">{tags_html}</div>', unsafe_allow_html=True)
-        
-        # Additional metadata in a clean grid (without min_salary)
-        metadata_cols = st.columns(2)
-        with metadata_cols[0]:
-            if category:
-                st.caption(f"**Category:** {category}")
-        with metadata_cols[1]:
-            if experience_level:
-                st.caption(f"**Experience:** {experience_level}")
-        
-        # Required Skills
-        if required_skills:
-            skills_str = ", ".join([f"`{skill}`" for skill in required_skills])
-            st.markdown(f"**Required Skills:** {skills_str}")
-        else:
-            st.markdown("**Required Skills:** Not specified")
-        
-        # Salary Range - improved formatting with cleaning
-        if salary_range:
-            import re
-            # Clean salary_range if it contains dict representations (e.g., "{'label': 'USD', 'value': 'USD'}")
-            if isinstance(salary_range, str) and ("'label'" in salary_range or '"label"' in salary_range):
-                # Extract only numbers from the string
-                numbers = re.findall(r'\d+[\d,]*', salary_range)
-                if numbers:
-                    # Remove commas and convert to int
-                    clean_numbers = [int(n.replace(',', '')) for n in numbers if n.replace(',', '').isdigit()]
-                    if len(clean_numbers) == 1:
-                        salary_range = f"${clean_numbers[0]:,}"
-                    elif len(clean_numbers) >= 2:
-                        salary_range = f"${clean_numbers[0]:,} - ${clean_numbers[-1]:,}"
-                    else:
-                        salary_range = None
-            
-            if salary_range:
-                # Extract numbers from salary range for better display
-                salary_numbers = re.findall(r'\$?[\d,]+', salary_range)
-                if salary_numbers:
-                    # Format with proper styling
-                    st.markdown(
-                        f'<div style="margin: 0.5rem 0; padding: 0.75rem; background-color: #f0f9ff; border-radius: 0.5rem; border-left: 4px solid #1f77b4;">'
-                        f'<strong style="color: #1f77b4; font-size: 0.9rem;">💰 Salary Range:</strong> '
-                        f'<span style="font-weight: bold; font-size: 1.1rem; color: #1f77b4; margin-left: 0.5rem;">{salary_range}</span>'
-                        f'</div>',
-                        unsafe_allow_html=True
-                    )
-                else:
-                    st.markdown(f"**Salary Range:** {salary_range}")
-        
-        # Description URL link
-        if description_url:
-            st.markdown(f"[→ View Full Details]({description_url})")
-        
-        # AI Insights Positioning: Place '🤖 AI Analysis' in an expander to save vertical space
-        if ai_insight:
-            st.markdown("---")
-            # Wrap AI Analysis in expander - open by default if score > 70%
-            expander_default_open = current_score is not None and current_score > 70
-            with st.expander("🤖 Why is this a match?", expanded=expander_default_open):
-                # Use color coding based on score inside the expander
-                if current_score is not None:
-                    if current_score > 80:
-                        # High match - use success styling
-                        st.success(ai_insight)
-                    elif current_score < 50:
-                        # Low match - use warning styling
-                        st.warning(ai_insight)
-                    else:
-                        # Medium match - use info styling
-                        st.info(ai_insight)
-                else:
-                    # Default info styling if score is not available
-                    st.info(ai_insight)
-        
-        # Place Semantic Score at the very bottom in small, muted text (as a technical reference)
-        if pinecone_score is not None:
-            pinecone_percent = pinecone_score * 100
-            st.markdown(
-                f'<div style="margin-top: 1rem; padding-top: 0.5rem; border-top: 1px solid #e5e7eb; '
-                f'text-align: right; font-size: 0.75rem; color: #999;">'
-                f'Semantic Score: {pinecone_percent:.1f}%</div>',
-                unsafe_allow_html=True
-            )
-        
-        st.markdown("")  # Add spacing between cards
+        {f'<div style="margin-bottom: 16px;">{signals_html}</div>' if signals_html else ''}
+
+        <a href="{description_url}" target="_blank" class="apply-btn">
+            <span>→</span> Apply
+        </a>
+    </div>
+    """
+    
+    st.markdown(card_html, unsafe_allow_html=True)
+    
+    # AI Insight (outside the HTML card as standard Streamlit component for expandability)
+    if ai_insight:
+        with st.expander("🤖 Why this match?", expanded=False):
+             st.info(ai_insight)
 
 
 def display_matching_report(report: MatchingReport, index: int):

@@ -4,7 +4,7 @@ Vacancy Search Service schemas using Pydantic V2.
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
 
@@ -128,6 +128,78 @@ class VacancyFilter(BaseModel):
         }
 
 
+class BlockContent(BaseModel):
+    """Content structure for a block (META, CONTEXT, WORK, FIT, OFFER)."""
+    
+    units: List[str] = Field(default_factory=list, description="List of atomic strings/bullets")
+    headings: List[str] = Field(default_factory=list, description="List of heading strings")
+
+
+class Blocks(BaseModel):
+    """Block-based segmentation of job description."""
+    
+    META: Optional[BlockContent] = Field(None, description="Metadata block")
+    CONTEXT: Optional[BlockContent] = Field(None, description="Context block")
+    WORK: Optional[BlockContent] = Field(None, description="Work responsibilities block")
+    FIT: Optional[BlockContent] = Field(None, description="Fit/requirements block")
+    OFFER: Optional[BlockContent] = Field(None, description="Offer/benefits block")
+
+
+class RoleExtracted(BaseModel):
+    """Extracted role information."""
+    
+    responsibilities_core: List[str] = Field(default_factory=list, description="3-12 core responsibilities")
+    responsibilities_all: List[str] = Field(default_factory=list, description="All responsibilities")
+    tech_stack: List[str] = Field(default_factory=list, description="Explicitly mentioned technologies")
+    must_skills: List[str] = Field(default_factory=list, description="Required skills")
+    nice_skills: List[str] = Field(default_factory=list, description="Nice-to-have skills")
+    experience_years_min: Optional[int] = Field(None, description="Minimum years of experience")
+    seniority_signal: Optional[str] = Field(None, description="Seniority indicator")
+    customer_facing: bool = Field(False, description="Whether role involves direct client interaction")
+
+
+class CompanyExtracted(BaseModel):
+    """Extracted company information."""
+    
+    domain_tags: List[str] = Field(default_factory=list, description="Domain/industry tags")
+    product_type: Optional[str] = Field(None, description="Product type")
+    culture_signals: List[str] = Field(default_factory=list, description="Culture indicators")
+    go_to_market: Optional[str] = Field(None, description="B2B or B2C")
+    scale_signals: List[str] = Field(default_factory=list, description="Scale indicators (e.g., 'ARR $1B')")
+
+
+class OfferExtracted(BaseModel):
+    """Extracted offer information."""
+    
+    benefits: List[str] = Field(default_factory=list, description="List of benefits")
+    equity: bool = Field(False, description="Whether equity is offered")
+    hiring_process: List[str] = Field(default_factory=list, description="Hiring process steps")
+
+
+class ConstraintsExtracted(BaseModel):
+    """Extracted constraints information."""
+    
+    timezone: Optional[str] = Field(None, description="Timezone requirement")
+    visa_or_work_auth: Optional[str] = Field(None, description="Visa/work authorization requirement")
+    travel_required: bool = Field(False, description="Whether travel is required")
+
+
+class ExtractedEntities(BaseModel):
+    """Extracted entities from job description."""
+    
+    role: RoleExtracted = Field(default_factory=RoleExtracted, description="Role information")
+    company: CompanyExtracted = Field(default_factory=CompanyExtracted, description="Company information")
+    offer: OfferExtracted = Field(default_factory=OfferExtracted, description="Offer information")
+    constraints: ConstraintsExtracted = Field(default_factory=ConstraintsExtracted, description="Constraints information")
+
+
+class AIReadyViews(BaseModel):
+    """AI-ready compacted summaries."""
+    
+    role_profile_text: Optional[str] = Field(None, description="Compacted role profile summary")
+    company_profile_text: Optional[str] = Field(None, description="Compacted company profile summary")
+
+
 class Vacancy(BaseModel):
     """Vacancy posting schema."""
 
@@ -147,6 +219,13 @@ class Vacancy(BaseModel):
     employee_count: Optional[str] = Field(None, description="Company employee count")
     full_description: str = Field(..., description="Full job description for vector search")
     raw_html_url: Optional[str] = Field(None, description="URL to raw HTML file in Azure Blob Storage")
+    
+    # New block-based and extracted entity structure
+    blocks: Optional[Blocks] = Field(None, description="Block-based segmentation of job description")
+    extracted: Optional[ExtractedEntities] = Field(None, description="Extracted entities from job description")
+    evidence_map: Dict[str, List[str]] = Field(default_factory=dict, description="Mapping of fields to source evidence quotes")
+    ai_ready_views: Optional[AIReadyViews] = Field(None, description="AI-ready compacted summaries")
+    normalization_warnings: List[str] = Field(default_factory=list, description="Warnings about data issues (e.g., invalid salary)")
 
     class Config:
         """Pydantic configuration."""

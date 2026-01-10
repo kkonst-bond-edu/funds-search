@@ -13,7 +13,7 @@ talent_strategist:
   model: "deepseek-chat"
   prompt_file: "talent_strategist.txt"
   temperature: 0.1
-classification_agent:
+vacancy_analyst:
   provider: "deepseek"
   model: "deepseek-chat"
   prompt_file: "classification.txt"

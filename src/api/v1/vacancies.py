@@ -725,6 +725,18 @@ def build_pinecone_filter(filter_params: VacancyFilter, remote_available: Option
         # Remove duplicates
         normalized_stages = list(set(expanded_stages))
         filter_dict["company_stage"] = {"$in": normalized_stages}
+
+    # Metadata filtering: category (exact match)
+    if filter_params.category:
+        filter_dict["category"] = {"$eq": filter_params.category}
+
+    # Metadata filtering: experience_level (exact match)
+    if filter_params.experience_level:
+        filter_dict["experience_level"] = {"$eq": filter_params.experience_level}
+
+    # Metadata filtering: employee_count (list match)
+    if filter_params.employee_count:
+        filter_dict["employee_count"] = {"$in": filter_params.employee_count}
     
     return filter_dict if filter_dict else None
 
@@ -1004,6 +1016,50 @@ def metadata_to_vacancy(metadata: Dict[str, Any]) -> Vacancy:
     employee_count = metadata.get("employee_count")
     is_hybrid = metadata.get("is_hybrid", False)
     
+    # Parse enriched fields from JSON strings if needed
+    # These are stored as JSON strings in Pinecone metadata to respect size limits
+    import json
+    
+    blocks_data = metadata.get("blocks")
+    if isinstance(blocks_data, str):
+        try:
+            blocks_data = json.loads(blocks_data)
+        except Exception as e:
+            logger.warning("blocks_json_parse_failed", error=str(e))
+            blocks_data = None
+
+    extracted_data = metadata.get("extracted")
+    if isinstance(extracted_data, str):
+        try:
+            extracted_data = json.loads(extracted_data)
+        except Exception as e:
+            logger.warning("extracted_json_parse_failed", error=str(e))
+            extracted_data = None
+
+    evidence_map_data = metadata.get("evidence_map", {})
+    if isinstance(evidence_map_data, str):
+        try:
+            evidence_map_data = json.loads(evidence_map_data)
+        except Exception as e:
+            logger.warning("evidence_map_json_parse_failed", error=str(e))
+            evidence_map_data = {}
+
+    ai_ready_views_data = metadata.get("ai_ready_views")
+    if isinstance(ai_ready_views_data, str):
+        try:
+            ai_ready_views_data = json.loads(ai_ready_views_data)
+        except Exception as e:
+            logger.warning("ai_ready_views_json_parse_failed", error=str(e))
+            ai_ready_views_data = None
+
+    normalization_warnings_data = metadata.get("normalization_warnings", [])
+    if isinstance(normalization_warnings_data, str):
+        try:
+            normalization_warnings_data = json.loads(normalization_warnings_data)
+        except Exception as e:
+            logger.warning("normalization_warnings_json_parse_failed", error=str(e))
+            normalization_warnings_data = []
+
     vacancy = Vacancy(
         title=metadata.get("title", "Unknown"),
         company_name=metadata.get("company_name", "Unknown"),
@@ -1021,6 +1077,13 @@ def metadata_to_vacancy(metadata: Dict[str, Any]) -> Vacancy:
         source_url=metadata.get("source_url"),
         full_description=metadata.get("text", "") or metadata.get("full_description", ""),
         min_salary=min_salary,
+        # New enriched fields
+        blocks=blocks_data,
+        extracted=extracted_data,
+        evidence_map=evidence_map_data,
+        ai_ready_views=ai_ready_views_data,
+        normalization_warnings=normalization_warnings_data,
+        raw_html_url=metadata.get("raw_html_url")
     )
 
     return vacancy

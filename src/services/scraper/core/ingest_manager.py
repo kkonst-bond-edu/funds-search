@@ -25,14 +25,14 @@ if not logger.handlers:
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
-# Import ClassificationAgent - use absolute import path
-# File location: apps/orchestrator/agents/classification.py
+# Import VacancyAnalyst - use absolute import path
+# File location: apps/orchestrator/agents/vacancy_analyst.py
 # Current file: src/services/scraper/core/ingest_manager.py
-# Absolute import: from apps.orchestrator.agents.classification import ClassificationAgent
+# Absolute import: from apps.orchestrator.agents.vacancy_analyst import VacancyAnalyst
 # This should work if project root is in PYTHONPATH (standard practice)
 try:
-    from apps.orchestrator.agents.classification import ClassificationAgent
-    logger.debug("Successfully imported ClassificationAgent from apps.orchestrator.agents.classification")
+    from apps.orchestrator.agents.vacancy_analyst import VacancyAnalyst
+    logger.debug("Successfully imported VacancyAnalyst from apps.orchestrator.agents.vacancy_analyst")
 except ImportError as e:
     # Fallback: try adding project root to path and importing again
     import sys
@@ -48,13 +48,13 @@ except ImportError as e:
         sys.path.insert(0, project_root_str)
         logger.debug(f"Added project root to sys.path: {project_root_str}")
         try:
-            from apps.orchestrator.agents.classification import ClassificationAgent
-            logger.info(f"Successfully imported ClassificationAgent after adding {project_root_str} to sys.path")
+            from apps.orchestrator.agents.vacancy_analyst import VacancyAnalyst
+            logger.info(f"Successfully imported VacancyAnalyst after adding {project_root_str} to sys.path")
         except ImportError as e2:
-            ClassificationAgent = None
-            expected_path = project_root / "apps" / "orchestrator" / "agents" / "classification.py"
+            VacancyAnalyst = None
+            expected_path = project_root / "apps" / "orchestrator" / "agents" / "vacancy_analyst.py"
             logger.error(
-                f"Failed to import ClassificationAgent even after adding project root to path. "
+                f"Failed to import VacancyAnalyst even after adding project root to path. "
                 f"Original error: {e}. Second error: {e2}. "
                 f"Project root: {project_root_str}. "
                 f"Expected file: {expected_path}. "
@@ -62,14 +62,14 @@ except ImportError as e:
             )
     else:
         # Project root is already in path, but import still failed
-        ClassificationAgent = None
-        expected_path = project_root / "apps" / "orchestrator" / "agents" / "classification.py"
+        VacancyAnalyst = None
+        expected_path = project_root / "apps" / "orchestrator" / "agents" / "vacancy_analyst.py"
         logger.error(
-            f"Failed to import ClassificationAgent. Error: {e}. "
+            f"Failed to import VacancyAnalyst. Error: {e}. "
             f"Project root ({project_root_str}) is already in sys.path. "
             f"Expected file: {expected_path}. "
             f"File exists: {expected_path.exists()}. "
-            f"Please check that apps/orchestrator/agents/classification.py exists and is accessible."
+            f"Please check that apps/orchestrator/agents/vacancy_analyst.py exists and is accessible."
         )
 
 
@@ -212,6 +212,75 @@ def generate_vacancy_id(company_name: str, title: str, description_url: str) -> 
     return f"{company_slug}-{title_slug}-{hash_prefix}"
 
 
+def clean_scraper_noise(text: str) -> str:
+    """
+    Remove technical scraper noise from job descriptions.
+    
+    Filters out common scraper artifacts like:
+    - "You need to enable JavaScript to run this app."
+    - Footer links (Privacy Policy, Security, etc.)
+    - Other common scraper noise patterns
+    
+    Args:
+        text: Raw text from scraper
+        
+    Returns:
+        Cleaned text with noise removed
+    """
+    if not text:
+        return text
+    
+    # Common scraper noise patterns to remove
+    noise_patterns = [
+        r"You need to enable JavaScript to run this app\.",
+        r"Privacy Policy",
+        r"Security",
+        r"Vulnerability Disclosure",
+        r"Terms of Service",
+        r"Cookie Policy",
+        r"© \d{4}.*?All rights reserved",
+        r"Powered by.*",
+    ]
+    
+    cleaned = text
+    for pattern in noise_patterns:
+        # Remove the pattern and surrounding whitespace
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+    
+    # Clean up multiple consecutive newlines/whitespace
+    cleaned = re.sub(r'\n\s*\n\s*\n+', '\n\n', cleaned)
+    cleaned = re.sub(r'[ \t]+', ' ', cleaned)
+    
+    return cleaned.strip()
+
+
+def normalize_location(location: str) -> str:
+    """
+    Normalize location string by removing extra spaces before commas.
+    
+    Examples:
+        "New York , NY , United States" -> "New York, NY, United States"
+        "San Francisco , CA" -> "San Francisco, CA"
+    
+    Args:
+        location: Location string to normalize
+        
+    Returns:
+        Normalized location string
+    """
+    if not location:
+        return location
+    
+    # Remove spaces before commas
+    normalized = re.sub(r'\s+,', ',', location)
+    # Remove multiple consecutive commas
+    normalized = re.sub(r',+', ',', normalized)
+    # Clean up extra whitespace
+    normalized = re.sub(r'\s+', ' ', normalized)
+    
+    return normalized.strip()
+
+
 def generate_search_text(vacancy: Vacancy) -> str:
     """
     Generate combined search text for embedding from vacancy data.
@@ -339,19 +408,19 @@ class IngestManager:
             logger.error(f"Failed to initialize Pinecone client: {str(e)}")
             raise
         
-        # Initialize ClassificationAgent for AI-powered vacancy classification
-        if ClassificationAgent is None:
-            logger.warning("ClassificationAgent class not available (import failed), skipping initialization")
+        # Initialize VacancyAnalyst for AI-powered vacancy classification
+        if VacancyAnalyst is None:
+            logger.warning("VacancyAnalyst class not available (import failed), skipping initialization")
             self.classifier = None
         else:
             try:
-                self.classifier = ClassificationAgent()
-                logger.info("ClassificationAgent initialized successfully")
+                self.classifier = VacancyAnalyst()
+                logger.info("VacancyAnalyst initialized successfully")
             except Exception as e:
                 # Log full traceback for debugging
                 error_traceback = traceback.format_exc()
                 logger.error(
-                    f"Failed to initialize ClassificationAgent: {str(e)}\n"
+                    f"Failed to initialize VacancyAnalyst: {str(e)}\n"
                     f"Traceback:\n{error_traceback}"
                 )
                 # Don't raise - allow processing to continue without classification
@@ -389,6 +458,75 @@ class IngestManager:
         
         return True
 
+    def _normalize_product_type(self, product_type: Any) -> Optional[str]:
+        """
+        Normalize product_type from LLM response.
+        
+        Handles cases where LLM returns a list instead of a string.
+        
+        Args:
+            product_type: Product type value from LLM (can be str, list, or None)
+            
+        Returns:
+            Normalized string or None
+        """
+        if product_type is None:
+            return None
+        
+        if isinstance(product_type, str):
+            return product_type.strip() if product_type.strip() else None
+        
+        if isinstance(product_type, list):
+            if len(product_type) == 0:
+                return None
+            # Take first item if list is not empty
+            first_item = product_type[0]
+            if isinstance(first_item, str):
+                return first_item.strip() if first_item.strip() else None
+            # If first item is not a string, join all items
+            return ", ".join(str(item) for item in product_type if item).strip() or None
+        
+        # For any other type, convert to string
+        return str(product_type).strip() if str(product_type).strip() else None
+
+    def _is_scraper_noise(self, text: str) -> bool:
+        """
+        Check if a text unit is scraper noise that should be filtered out.
+        
+        Args:
+            text: Text to check
+            
+        Returns:
+            True if text is scraper noise, False otherwise
+        """
+        if not text or len(text.strip()) == 0:
+            return True
+        
+        text_lower = text.lower().strip()
+        
+        # Common scraper noise patterns
+        noise_patterns = [
+            "you need to enable javascript",
+            "privacy policy",
+            "security",
+            "vulnerability disclosure",
+            "terms of service",
+            "cookie policy",
+            "all rights reserved",
+            "powered by",
+        ]
+        
+        # Check if text matches any noise pattern
+        for pattern in noise_patterns:
+            if pattern in text_lower:
+                return True
+        
+        # Very short text that's likely noise (less than 3 characters after cleaning)
+        if len(text.strip()) < 3:
+            return True
+        
+        return False
+
     async def process_new_vacancy(self, vacancy: Vacancy, namespace: str = "vacancies") -> bool:
         """
         Process a new vacancy: validate, generate embedding, and upsert to Pinecone.
@@ -402,9 +540,9 @@ class IngestManager:
         """
         # Check classifier status at the beginning
         if self.classifier is None:
-            logger.info(f"Processing vacancy '{vacancy.title}': ClassificationAgent is None, skipping AI classification")
+            logger.info(f"Processing vacancy '{vacancy.title}': VacancyAnalyst is None, skipping AI classification")
         else:
-            logger.info(f"Processing vacancy '{vacancy.title}': ClassificationAgent is active, will perform AI classification")
+            logger.info(f"Processing vacancy '{vacancy.title}': VacancyAnalyst is active, will perform AI classification")
         
         # Validate the vacancy
         if not self._validate_vacancy(vacancy):
@@ -732,7 +870,7 @@ class IngestManager:
                         logger.debug(f"Set default experience_level='Unknown' after classification failure")
                     # Continue processing even if classification fails
             else:
-                logger.warning("ClassificationAgent not available, skipping AI classification")
+                logger.warning("VacancyAnalyst not available, skipping AI classification")
                 # Set defaults if classifier is not available
                 if not vacancy.category:
                     vacancy.category = "Other"
@@ -749,6 +887,177 @@ class IngestManager:
             if not vacancy.experience_level:
                 vacancy.experience_level = "Unknown"
                 logger.warning(f"Experience_level was None, set to default 'Unknown' for {vacancy.title}")
+            
+            # Normalize location before processing
+            if vacancy.location:
+                original_location = vacancy.location
+                vacancy.location = normalize_location(vacancy.location)
+                if original_location != vacancy.location:
+                    logger.debug(f"Normalized location for {vacancy.title}: '{original_location}' -> '{vacancy.location}'")
+            
+            # AI Enrichment: Enrich vacancy with block-based segmentation and extracted entities
+            if self.classifier:
+                try:
+                    # If description is "Parsing Error", use only title for enrichment
+                    raw_description = (
+                        vacancy.title 
+                        if vacancy.full_description == "Parsing Error" 
+                        else vacancy.full_description
+                    )
+                    
+                    # Clean scraper noise from description before enrichment
+                    description_for_enrichment = clean_scraper_noise(raw_description)
+                    if raw_description != description_for_enrichment:
+                        logger.debug(f"Cleaned scraper noise from description for {vacancy.title} (removed {len(raw_description) - len(description_for_enrichment)} chars)")
+                    
+                    # Check for incomplete description (< 500 characters) and add warning
+                    if description_for_enrichment and len(description_for_enrichment) < 500:
+                        logger.warning(
+                            f"Incomplete description detected for {vacancy.title}: "
+                            f"only {len(description_for_enrichment)} characters"
+                        )
+                    
+                    # Call enrichment with required_skills for merging
+                    logger.info(
+                        f"Calling enrichment for {vacancy.title}: "
+                        f"description_length={len(description_for_enrichment)}, "
+                        f"has_required_skills={bool(vacancy.required_skills)}"
+                    )
+                    
+                    enrichment_result = await self.classifier.enrich(
+                        vacancy.title,
+                        description_for_enrichment,
+                        required_skills=vacancy.required_skills if vacancy.required_skills else None
+                    )
+                    
+                    # Log enrichment result structure
+                    logger.debug(
+                        f"Enrichment result for {vacancy.title}: "
+                        f"has_blocks={enrichment_result.get('blocks') is not None}, "
+                        f"has_extracted={enrichment_result.get('extracted') is not None}, "
+                        f"evidence_map_keys={list(enrichment_result.get('evidence_map', {}).keys())}, "
+                        f"warnings={enrichment_result.get('normalization_warnings', [])}"
+                    )
+                    
+                    # Update vacancy with enriched data
+                    # Import the models to construct them properly
+                    from src.schemas.vacancy import (
+                        Blocks, BlockContent, ExtractedEntities, RoleExtracted,
+                        CompanyExtracted, OfferExtracted, ConstraintsExtracted, AIReadyViews
+                    )
+                    
+                    # Check if enrichment actually succeeded (not just error warnings)
+                    has_enrichment_errors = any(
+                        "Failed to parse" in warning or "Enrichment error" in warning
+                        for warning in enrichment_result.get("normalization_warnings", [])
+                    )
+                    
+                    if has_enrichment_errors:
+                        logger.warning(
+                            f"Enrichment had errors for {vacancy.title}, "
+                            f"warnings: {enrichment_result.get('normalization_warnings', [])}"
+                        )
+                    
+                    # Build blocks structure (evidence_quotes removed - evidence belongs only in evidence_map)
+                    blocks_data = enrichment_result.get("blocks")
+                    if blocks_data:
+                        blocks_dict = {}
+                        for block_key in ["META", "CONTEXT", "WORK", "FIT", "OFFER"]:
+                            block_data = blocks_data.get(block_key)
+                            if block_data:
+                                # Filter out scraper noise from units
+                                units = block_data.get("units", [])
+                                filtered_units = [
+                                    unit for unit in units 
+                                    if unit and not self._is_scraper_noise(unit)
+                                ]
+                                
+                                # Filter out scraper noise from headings
+                                headings = block_data.get("headings", [])
+                                filtered_headings = [
+                                    heading for heading in headings 
+                                    if heading and not self._is_scraper_noise(heading)
+                                ]
+                                
+                                blocks_dict[block_key] = BlockContent(
+                                    units=filtered_units,
+                                    headings=filtered_headings
+                                )
+                        if blocks_dict:
+                            vacancy.blocks = Blocks(**blocks_dict)
+                    
+                    # Build extracted entities structure
+                    extracted_data = enrichment_result.get("extracted")
+                    if extracted_data:
+                        role_data = extracted_data.get("role", {})
+                        company_data = extracted_data.get("company", {})
+                        offer_data = extracted_data.get("offer", {})
+                        constraints_data = extracted_data.get("constraints", {})
+                        
+                        vacancy.extracted = ExtractedEntities(
+                            role=RoleExtracted(
+                                responsibilities_core=role_data.get("responsibilities_core", []),
+                                responsibilities_all=role_data.get("responsibilities_all", []),
+                                tech_stack=role_data.get("tech_stack", []),
+                                must_skills=role_data.get("must_skills", []),
+                                nice_skills=role_data.get("nice_skills", []),
+                                experience_years_min=role_data.get("experience_years_min"),
+                                seniority_signal=role_data.get("seniority_signal"),
+                                customer_facing=role_data.get("customer_facing", False)
+                            ),
+                            company=CompanyExtracted(
+                                domain_tags=company_data.get("domain_tags", []),
+                                # Handle product_type: if LLM returns a list, take first item or join; if empty list, use None
+                                product_type=self._normalize_product_type(company_data.get("product_type")),
+                                culture_signals=company_data.get("culture_signals", []),
+                                go_to_market=company_data.get("go_to_market"),
+                                scale_signals=company_data.get("scale_signals", [])
+                            ),
+                            offer=OfferExtracted(
+                                benefits=offer_data.get("benefits", []),
+                                equity=offer_data.get("equity", False),
+                                hiring_process=offer_data.get("hiring_process", [])
+                            ),
+                            constraints=ConstraintsExtracted(
+                                timezone=constraints_data.get("timezone"),
+                                visa_or_work_auth=constraints_data.get("visa_or_work_auth"),
+                                travel_required=constraints_data.get("travel_required", False)
+                            )
+                        )
+                    
+                    # Set evidence_map and ai_ready_views
+                    vacancy.evidence_map = enrichment_result.get("evidence_map", {})
+                    
+                    ai_views_data = enrichment_result.get("ai_ready_views")
+                    if ai_views_data:
+                        vacancy.ai_ready_views = AIReadyViews(
+                            role_profile_text=ai_views_data.get("role_profile_text"),
+                            company_profile_text=ai_views_data.get("company_profile_text")
+                        )
+                    
+                    # Set normalization_warnings and add INCOMPLETE_DESCRIPTION if needed
+                    normalization_warnings = enrichment_result.get("normalization_warnings", [])
+                    if description_for_enrichment and len(description_for_enrichment) < 500:
+                        if "INCOMPLETE_DESCRIPTION" not in normalization_warnings:
+                            normalization_warnings.append("INCOMPLETE_DESCRIPTION")
+                    vacancy.normalization_warnings = normalization_warnings
+                    
+                    logger.info(
+                        f"Enrichment completed for {vacancy.title}: "
+                        f"blocks={vacancy.blocks is not None}, "
+                        f"extracted={vacancy.extracted is not None}, "
+                        f"warnings={len(vacancy.normalization_warnings)}"
+                    )
+                    
+                except Exception as e:
+                    logger.warning(
+                        f"Enrichment failed for {vacancy.title}: {str(e)}. "
+                        f"Continuing with processing without enrichment.",
+                        exc_info=True
+                    )
+                    # Continue processing even if enrichment fails
+            else:
+                logger.debug("VacancyAnalyst not available, skipping enrichment")
             
             # Generate search text for embedding
             search_text = generate_search_text(vacancy)
@@ -795,6 +1104,29 @@ class IngestManager:
                     return default_value
                 return str(value) if value else default_value
             
+            # Helper function to stringify nested objects for Pinecone metadata
+            # Pinecone has metadata size limits, so we stringify complex nested structures
+            def stringify_for_metadata(obj, max_length: int = 10000) -> Optional[str]:
+                """Convert nested object to JSON string for Pinecone metadata."""
+                if obj is None:
+                    return None
+                try:
+                    import json
+                    # Convert Pydantic models to dict first (prefer model_dump for Pydantic v2)
+                    if hasattr(obj, 'model_dump'):
+                        obj = obj.model_dump()
+                    elif hasattr(obj, 'dict'):
+                        obj = obj.dict()
+                    json_str = json.dumps(obj, ensure_ascii=False)
+                    # Truncate if too long to stay within Pinecone limits
+                    if len(json_str) > max_length:
+                        json_str = json_str[:max_length] + "...[truncated]"
+                        logger.warning(f"Metadata string truncated to {max_length} chars for {vacancy.title}")
+                    return json_str
+                except Exception as e:
+                    logger.warning(f"Failed to stringify object for metadata: {e}")
+                    return None
+            
             # Prepare metadata with all fields, using defaults for missing values
             # All values should be strings (except remote_option which is bool) to match search filters
             # required_skills is always a List[str]
@@ -803,6 +1135,9 @@ class IngestManager:
             # - remote_option: Preserves True from API, won't be overwritten by AI False
             # - required_skills: Case-insensitive deduplication, prioritizes exact API tag strings
             # - category and experience_level: Guaranteed to never be None (defaults: "Other", "Unknown")
+            #
+            # Enriched fields (blocks, extracted, evidence_map, ai_ready_views, normalization_warnings)
+            # are stored as JSON strings to stay within Pinecone metadata size limits (max 10KB per field)
             metadata = {
                 "title": vacancy.title or "",
                 "company_name": vacancy.company_name or "",
@@ -823,6 +1158,46 @@ class IngestManager:
             
             if vacancy.employee_count:
                 metadata["employee_count"] = vacancy.employee_count
+            
+            # Add enriched fields (stringified for Pinecone metadata size limits)
+            # These fields are stored as JSON strings to stay within Pinecone metadata size limits
+            enriched_fields_count = 0
+            
+            if vacancy.blocks:
+                blocks_str = stringify_for_metadata(vacancy.blocks)
+                if blocks_str:
+                    metadata["blocks"] = blocks_str
+                    enriched_fields_count += 1
+            
+            if vacancy.extracted:
+                extracted_str = stringify_for_metadata(vacancy.extracted)
+                if extracted_str:
+                    metadata["extracted"] = extracted_str
+                    enriched_fields_count += 1
+            
+            if vacancy.evidence_map:
+                evidence_str = stringify_for_metadata(vacancy.evidence_map)
+                if evidence_str:
+                    metadata["evidence_map"] = evidence_str
+                    enriched_fields_count += 1
+            
+            if vacancy.ai_ready_views:
+                ai_views_str = stringify_for_metadata(vacancy.ai_ready_views)
+                if ai_views_str:
+                    metadata["ai_ready_views"] = ai_views_str
+                    enriched_fields_count += 1
+            
+            if vacancy.normalization_warnings:
+                # Warnings are already a list, convert to JSON string
+                warnings_str = stringify_for_metadata(vacancy.normalization_warnings)
+                if warnings_str:
+                    metadata["normalization_warnings"] = warnings_str
+                    enriched_fields_count += 1
+            
+            if enriched_fields_count > 0:
+                logger.debug(
+                    f"Added {enriched_fields_count} enriched fields to Pinecone metadata for {vacancy.title}"
+                )
             
             # Filter out None values as Pinecone doesn't accept null
             metadata = {k: v for k, v in metadata.items() if v is not None}
@@ -875,4 +1250,3 @@ class IngestManager:
             if not vacancy.experience_level:
                 vacancy.experience_level = "Unknown"
             return False
-
