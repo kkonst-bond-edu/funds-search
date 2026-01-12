@@ -1842,6 +1842,14 @@ async def chat_search(request: ChatRequest) -> ChatResponse:
         has_persona = bool(updated_persona) and isinstance(updated_persona, dict) and len(updated_persona) > 0
         persona_applied = False
         
+        # Define sort_key function outside the if block so it's always available
+        def sort_key(v):
+            score = v.get('score')
+            if score is not None:
+                return float(score)  # Sort by score (0-100) descending
+            else:
+                return -1.0  # No score, sort to end
+        
         if vacancies_response:
             logger.info("matchmaker_analysis_started", vacancy_count=len(vacancies_response), has_persona=has_persona)
             
@@ -2013,17 +2021,10 @@ Description URL: {vacancy_dict.get('description_url', 'N/A')}
                     continue
             
             logger.info("matchmaker_analysis_completed", successful=successful_analyses, total=len(vacancies_response))
-            
-            # ========================================================================
-            # SORTING: Sort the final result list by 'score' (AI Score) descending
-            # ========================================================================
-            def sort_key(v):
-                score = v.get('score')
-                if score is not None:
-                    return float(score)  # Sort by score (0-100) descending
-                else:
-                    return -1.0  # No score, sort to end
-            
+        
+        # ========================================================================
+        # SORTING: Sort the final result list by 'score' (AI Score) descending
+        # ========================================================================
         # Remove duplicates by description_url before sorting (keep highest score)
         url_to_best = {}
         for v in vacancies_response:
@@ -2044,9 +2045,10 @@ Description URL: {vacancy_dict.get('description_url', 'N/A')}
         if duplicates_removed > 0:
             logger.info("chat_duplicates_removed", count=duplicates_removed, total_before=len(vacancies_response) + duplicates_removed, total_after=len(vacancies_response))
         
-        # Sort all vacancies by score (descending)
-        vacancies_response.sort(key=sort_key, reverse=True)
-        logger.info("vacancies_sorted_by_score", final_count=len(vacancies_response))
+        # Sort all vacancies by score (descending) - only if there are vacancies
+        if vacancies_response:
+            vacancies_response.sort(key=sort_key, reverse=True)
+            logger.info("vacancies_sorted_by_score", final_count=len(vacancies_response))
         
         # Generate AI summary of results using the top vacancies
         # Convert dicts back to Vacancy objects for the summary function
