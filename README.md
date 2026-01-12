@@ -9,7 +9,7 @@ Traditional job boards are keyword-based and overwhelming. This application acts
 1.  **Conversational**: Talk naturally ("I want a remote Python role in a Series A fintech") instead of fiddling with 20 filters.
 2.  **Context-Aware**: It understands *intent* and matches your *persona* (CV) to the job requirements, not just keywords.
 3.  **Transparent**: Every match comes with an AI-generated explanation of *why* it fits you.
-4.  **Autonomous**: If matches are missing, it dispatches a "Hunter Agent" to crawl live boards in real-time.
+4.  **Autonomous**: Uses a **Talent Strategist** to remember your preferences and a **Job Scout** to intelligently query the database.
 
 ---
 
@@ -27,7 +27,7 @@ DEEPSEEK_API_KEY=...
 OPENAI_API_KEY=...
 ANTHROPIC_API_KEY=...
 
-# Optional: real-time job crawling
+# Optional: needed only for Admin Scraper tool
 FIRECRAWL_API_KEY=...
 ```
 
@@ -73,15 +73,14 @@ graph TD
     subgraph "☁️ Cloud Infrastructure (Docker / K8s)"
         
         subgraph "🛠️ Orchestration Layer (FastAPI Gateway)"
-            UI <--> HUB{🧠 Agent Dispatcher}
+            UI <--> HUB{🧠 Orchestrator}
         end
 
         %% Specialized Agents
         subgraph "🤖 AI Agent Fleet (LangGraph)"
-            TS[<b>Talent Strategist</b><br/><i>The Profiler</i><br/>DeepSeek V3]:::agent
-            JS[<b>Job Scout</b><br/><i>The Intent Extractor</i><br/>DeepSeek R1]:::agent
-            MM[<b>Matchmaker</b><br/><i>The Analytical RAG</i><br/>Claude/GPT-4o]:::agent
-            HA[<b>Hunter Agent</b><br/><i>Real-time Scraper</i><br/>Firecrawl Service]:::agent
+            TS[<b>Talent Strategist</b><br/><i>Memory & Context</i><br/>DeepSeek V3]:::agent
+            JS[<b>Job Scout</b><br/><i>Search Architect</i><br/>DeepSeek V3]:::agent
+            MM[<b>Matchmaker</b><br/><i>Analyst</i><br/>DeepSeek V3]:::agent
             VA[<b>Vacancy Analyst</b><br/><i>The Enricher</i><br/>DeepSeek V3]:::agent
         end
 
@@ -96,30 +95,18 @@ graph TD
     subgraph "💾 Persistence Layer (Managed)"
         PC[(🌲 Pinecone Vector DB<br/><i>Vacancies Namespace</i>)]:::database
         PC2[(🌲 Pinecone Vector DB<br/><i>Personas Namespace</i>)]:::database
-        EXT[🌐 Vacancies Boards<br/><i>External Sources</i>]:::database
     end
 
     %% Connections
-    HUB -->|1. Parse CV| TS
-    TS -->|Text Extraction| CV
-    TS -->|Save Digital Twin| PC2
-
-    HUB -->|2. Understand Message| JS
-    JS -->|Vectorize Intent| EMB
-    EMB -->|Semantic Search| PC
-
-    HUB -->|3. Compare & Filter| MM
-    MM <-->|Fetch Top K| PC
-    MM <-->|Get User Profile| PC2
-
-    HUB -->|4. No Data?| HA
-    HA -->|Live Crawl| EXT
-    HA -->|Raw HTML| VA
-    VA -->|Enriched JSON| EMB
-    EMB -->|Vectors + Metadata| PC
-
-    %% Feedback loop
-    MM -->|Final Response| UI
+    HUB -->|1. Analyze CV & Chat| TS
+    TS -->|UserPersona| HUB
+    HUB -->|2. Search Params| JS
+    JS -->|Hybrid Query| HUB
+    HUB -->|3. Search DB| EMB
+    EMB -->|Vectors| PC
+    PC -->|Candidates| HUB
+    HUB -->|4. Analysis| MM
+    MM -->|Ranked Matches| UI
 ```
 
 ### 🧩 Parsing & Enrichment Pipeline
@@ -149,11 +136,10 @@ We avoid a single "all-knowing bot". Each agent is specialized, easier to debug,
 
 | Agent | Role | Model | Responsibility |
 |:------|:-----|:------|:---------------|
-| **Talent Strategist 🕵️‍♂️** | Profiler | **DeepSeek V3** | Parses CVs or interview answers to build a "Digital Twin" (UserPersona) with structured skills & preferences. |
-| **Job Scout 🛰️** | Intent Extractor | **DeepSeek R1** | Interprets vague chat messages ("like Google but in crypto") into structured filters and vector search queries. |
-| **Matchmaker 🤝** | Analyst (RAG) | **GPT-4o / Claude** | Reads candidate profiles vs. vacancies line-by-line. Assigns a relevance score and writes a "Why this fits" explanation. |
-| **Hunter Agent 🏹** | Scraper | **Firecrawl** | Wakes up if the local DB is empty or stale. Crawls external boards (e.g., Vacancies Boards) to fetch fresh data. |
-| **Vacancy Analyst 🧠** | Enrichment Specialist | **DeepSeek V3** | Classifies raw job post text into standardized taxonomies (Category, Seniority) and extracts structured entities (Benefits, Tech Stack, Culture) before indexing. |
+| **Talent Strategist 🕵️‍♂️** | Memory & Profiler | **DeepSeek V3** | "The Brain". Maintains the **User Persona** across the conversation. Incrementally updates skills, preferences (remote, salary, stage), and context without forgetting previous details. |
+| **Job Scout 🛰️** | Search Architect | **DeepSeek V3** | "The Translator". Converts the human-readable User Persona into a **Hybrid Search Query** (Semantic Vector + Metadata Filters) for Pinecone. It understands implied constraints (e.g., "stability" -> "Series B+"). |
+| **Matchmaker 🤝** | Analyst | **DeepSeek V3** | "The Critic". Reads candidate profiles vs. retrieved vacancies line-by-line. Assigns a relevance score (0-100) and writes a "Why this fits" explanation. |
+| **Vacancy Analyst 🧠** | Enrichment | **DeepSeek V3** | Classifies raw job post text into standardized taxonomies (Category, Seniority) and extracts structured entities (Benefits, Tech Stack, Culture) before indexing. |
 
 ### Agent Workflow
 
@@ -168,14 +154,13 @@ graph LR
     %% Nodes
     START((User Input)):::start
     
-    subgraph "Phase 1: Understanding"
-        TS[👤 Talent Strategist<br/>CV Parsing]:::agent
-        JS[🛰️ Job Scout<br/>Intent Extraction]:::agent
+    subgraph "Phase 1: Understanding & Memory"
+        TS[👤 Talent Strategist<br/>Update Persona]:::agent
     end
 
     subgraph "Phase 2: Discovery"
-        WH[🏹 Hunter Agent<br/>External Crawl]:::agent
-        SV[🔍 Search Node<br/>Vector Retrieval]:::process
+        JS[🛰️ Job Scout<br/>Generate Query]:::agent
+        SV[🔍 Search Node<br/>Hybrid Retrieval]:::process
     end
 
     subgraph "Phase 3: Analysis"
@@ -185,21 +170,14 @@ graph LR
     END((Response)):::endnode
 
     %% Flow
-    START -->|CV Upload| TS
-    START -->|Chat Message| JS
-    
-    TS -.->|UserPersona| JS
-    JS -->|Search Filters| SV
-    
-    SV --"No Results?"--> WH
-    WH -->|Fresh Jobs| SV
+    START -->|Message + History| TS
+    TS -->|Updated Persona| JS
+    JS -->|Semantic Query + Filters| SV
     
     SV -->|Top Candidates| MM
     TS -.->|UserPersona| MM
     MM -->|Ranked Matches| END
 ```
-
-
 
 ### CV Missing State
 

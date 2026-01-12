@@ -30,6 +30,7 @@ from src.services.exceptions import (
 )
 from apps.orchestrator.chat_search import ChatSearchAgent
 from apps.orchestrator.agents.matchmaker import MatchmakerAgent
+from apps.orchestrator.agents.talent_strategist import TalentStrategistAgent
 from pydantic import BaseModel, Field
 
 # Load environment variables
@@ -65,8 +66,9 @@ class ChatResponse(BaseModel):
     """Response schema for chat endpoint."""
     vacancies: List[Dict[str, Any]] = Field(..., description="List of matching vacancies with match scores and AI insights")
     summary: str = Field(..., description="AI-generated summary explaining the results")
-    debug_info: Dict[str, Any] = Field(default_factory=dict, description="Debug information including friendly_reasoning")
+    debug_info: Dict[str, Any] = Field(default_factory=dict, description="Debug information including friendly_reasoning, user_persona, and search_filters")
     persona_applied: bool = Field(..., description="Flag indicating if persona data was successfully used for matching")
+    updated_persona: Optional[Dict[str, Any]] = Field(None, description="Updated user persona after processing the message (for memory persistence)")
 
 
 class VacancySearchResponse(BaseModel):
@@ -1412,16 +1414,46 @@ async def chat_search(request: ChatRequest) -> ChatResponse:
         else:
             logger.info("chat_search_with_persona", persona_keys=list(request.persona.keys()) if isinstance(request.persona, dict) else "not_dict")
         
-        # Initialize chat search agent
+        # ========================================================================
+        # Step 1: Update persona using Talent Strategist (MEMORY)
+        # ========================================================================
+        # This ensures persona evolves over the conversation, remembering
+        # user preferences, skills, and requirements from previous messages
+        updated_persona = request.persona
+        if request.message:
+            try:
+                strategist = TalentStrategistAgent()
+                updated_persona = await strategist.update_persona(
+                    current_persona=request.persona,
+                    user_message=request.message,
+                    chat_history=request.history or []
+                )
+                logger.info(
+                    "persona_updated_by_talent_strategist",
+                    persona_keys=list(updated_persona.keys()) if updated_persona else [],
+                    has_skills=bool(updated_persona.get("technical_skills")),
+                    has_preferences=bool(updated_persona.get("preferred_company_stages") or updated_persona.get("preferred_locations")),
+                    remote_only=updated_persona.get("remote_only"),
+                    salary_min=updated_persona.get("salary_min")
+                )
+            except Exception as e:
+                logger.error("persona_update_failed", error=str(e), error_type=type(e).__name__)
+                # Fallback to original persona on error
+                updated_persona = request.persona
+        
+        # ========================================================================
+        # Step 2: Use updated persona for Job Scout (SEARCH)
+        # ========================================================================
+        # Initialize chat search agent (Job Scout)
         chat_agent = ChatSearchAgent()
         
-        # Orchestration: Pass persona to chat_search_agent.interpret_message()
+        # Orchestration: Pass UPDATED persona to chat_search_agent.interpret_message()
         # Interpret user message to extract search parameters
-        # Pass history and persona for context-aware search
+        # Pass history and updated persona for context-aware search
         extracted_params = await chat_agent.interpret_message(
             request.message,
             history=request.history or [],
-            persona=request.persona
+            persona=updated_persona  # Use UPDATED persona, not original
         )
         
         # Extract search_mode from interpreted params
@@ -1460,8 +1492,8 @@ async def chat_search(request: ChatRequest) -> ChatResponse:
         
         # Inject persona skills into search parameters for persona mode
         # This forces the DB to look for embeddings matching the candidate's top skills
-        if search_mode == "persona" and request.persona:
-            persona_skills = request.persona.get("technical_skills")
+        if search_mode == "persona" and updated_persona:
+            persona_skills = updated_persona.get("technical_skills")
             if persona_skills:
                 # Extract top 5 technical skills from persona
                 if isinstance(persona_skills, list):
@@ -1528,7 +1560,7 @@ async def chat_search(request: ChatRequest) -> ChatResponse:
             )
         else:
             # Fallback: build query if role is missing
-            search_query = build_search_query(filter_params, persona=request.persona, search_mode=search_mode)
+            search_query = build_search_query(filter_params, persona=updated_persona, search_mode=search_mode)
             logger.info(
                 "chat_search_query_built_fallback",
                 query=search_query,
@@ -1539,7 +1571,7 @@ async def chat_search(request: ChatRequest) -> ChatResponse:
             "chat_search_query_built", 
             query=search_query, 
             search_mode=search_mode,
-            has_persona=request.persona is not None,
+            has_persona=updated_persona is not None,
             required_keywords=required_keywords
         )
         
@@ -1806,8 +1838,8 @@ async def chat_search(request: ChatRequest) -> ChatResponse:
         # The Matchmaker must return a JSON with 'score' (0-100) and 'analysis' (text)
         # ========================================================================
         
-        # Check if persona data is available and valid
-        has_persona = bool(request.persona) and isinstance(request.persona, dict) and len(request.persona) > 0
+        # Check if persona data is available and valid (use updated_persona)
+        has_persona = bool(updated_persona) and isinstance(updated_persona, dict) and len(updated_persona) > 0
         persona_applied = False
         
         if vacancies_response:
@@ -1846,12 +1878,12 @@ Description URL: {vacancy_dict.get('description_url', 'N/A')}
                     # Get Pinecone score for this vacancy (if available)
                     pinecone_score = vacancy_dict.get('pinecone_score')
                     
-                    # Orchestration: Pass the SAME persona to matchmaker_agent.analyze_match()
-                    # After getting search results, pass the SAME 'persona' to 'matchmaker_agent.analyze_match()'
+                    # Orchestration: Pass the UPDATED persona to matchmaker_agent.analyze_match()
+                    # After getting search results, pass the UPDATED 'persona' to 'matchmaker_agent.analyze_match()'
                     # The Matchmaker must return a JSON with 'score' (0-100) and 'analysis' (text)
                     match_result = await matchmaker.analyze_match(
                         vacancy_text=vacancy_text,
-                        candidate_persona=request.persona,
+                        candidate_persona=updated_persona,  # Use UPDATED persona
                         similarity_score=pinecone_score  # Pass Pinecone score for context
                     )
                     
@@ -2057,6 +2089,38 @@ Description URL: {vacancy_dict.get('description_url', 'N/A')}
             logger.info("friendly_reasoning_added_to_debug_info", friendly_reasoning=friendly_reasoning)
         else:
             logger.warning("friendly_reasoning_missing", detail="Job Scout did not return friendly_reasoning")
+        
+        # ========================================================================
+        # Add persona and search_filters to debug_info for Technical Logs
+        # ========================================================================
+        # This allows UI to display persona state and search filters for debugging
+        debug_info["user_persona"] = updated_persona  # Show updated persona state
+        debug_info["search_filters"] = {
+            "metadata_filters": pinecone_filter,  # Pinecone metadata filters
+            "filter_params": {
+                "role": filter_params.role,
+                "skills": filter_params.skills,
+                "industry": filter_params.industry,
+                "location": filter_params.location,
+                "company_stages": filter_params.company_stages,
+                "is_remote": filter_params.is_remote,
+                "min_salary": filter_params.min_salary,
+                "category": filter_params.category,
+                "experience_level": filter_params.experience_level,
+            }
+        }
+        # Add extracted params for debugging
+        debug_info["extracted_role"] = extracted_params.get("role")
+        debug_info["identified_filters"] = {
+            "role": extracted_params.get("role"),
+            "skills": extracted_params.get("skills"),
+            "industry": extracted_params.get("industry"),
+            "location": extracted_params.get("location"),
+            "company_stage": extracted_params.get("company_stage"),
+            "required_keywords": extracted_params.get("required_keywords"),
+        }
+        debug_info["required_keywords"] = extracted_params.get("required_keywords")
+        debug_info["search_mode"] = search_mode
 
         logger.info("chat_search_completed", summary_length=len(summary), persona_applied=persona_applied)
 
@@ -2064,7 +2128,8 @@ Description URL: {vacancy_dict.get('description_url', 'N/A')}
             vacancies=vacancies_response,
             summary=summary,
             debug_info=debug_info,
-            persona_applied=persona_applied  # Flag indicating if persona was successfully used
+            persona_applied=persona_applied,  # Flag indicating if persona was successfully used
+            updated_persona=updated_persona  # Return updated persona for UI to persist
         )
         
     except HTTPException:

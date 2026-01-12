@@ -13,6 +13,8 @@ import httpx
 from shared.schemas import Job, MatchResult, SearchRequest, VacancyMatchResult, MatchRequest, UserPersona, MatchingReport
 from shared.pinecone_client import VectorStore
 from apps.orchestrator.llm import LLMProviderFactory
+from apps.orchestrator.agents.talent_strategist import TalentStrategistAgent
+from apps.orchestrator.agents.job_scout import JobScoutAgent
 
 logger = logging.getLogger(__name__)
 
@@ -281,13 +283,17 @@ class MatchingState(TypedDict):
     """State for the candidate-vacancy matching graph."""
     candidate_id: str
     candidate_embedding: List[float]
-    user_persona: Optional[UserPersona]  # User persona from interview/context
+    user_persona: Optional[Dict[str, Any]]  # User persona from interview/context (dict format for easier updates)
+    user_message: Optional[str]  # Latest user message for persona updates
+    chat_history: Optional[List[Dict[str, Any]]]  # Chat history for context
     raw_scraped_data: List[Dict[str, Any]]  # Raw scraped job data from web discovery
     retrieved_vacancies: List[Dict[str, Any]]  # List of vacancy search results
     vacancy_scores: List[float]  # Store similarity scores from Pinecone
     match_results: List[VacancyMatchResult]  # Legacy format (for backward compatibility)
     final_reports: List[MatchingReport]  # New structured matching reports
     top_k: int
+    search_filters: Optional[Dict[str, Any]]  # Generated search filters from Job Scout
+    semantic_query: Optional[str]  # Generated semantic query for vector search
 
 
 # System prompt for candidate-vacancy matching agent (provider-agnostic)
@@ -311,12 +317,13 @@ Format your response as a structured explanation that a recruiter would use to p
 
 async def talent_strategist_node(state: MatchingState) -> MatchingState:
     """
-    Placeholder node: Talent Strategist - Process interview context to build user persona.
+    Talent Strategist Node - Updates user persona from conversation context.
 
-    This node will:
-    - Process interview/conversation context
-    - Extract technical skills, career goals, preferences
-    - Build UserPersona object
+    This node:
+    - Takes current user_persona (may be None/empty)
+    - Analyzes latest user_message and chat_history
+    - Updates persona incrementally using TalentStrategistAgent
+    - Returns updated state with merged persona
 
     Args:
         state: Current matching state
@@ -324,25 +331,115 @@ async def talent_strategist_node(state: MatchingState) -> MatchingState:
     Returns:
         Updated state with user_persona
     """
-    # TODO: Implement interview processing logic
-    # For now, return state unchanged (placeholder)
-    logger.info("Talent Strategist node: Processing interview context (placeholder)")
-
-    # Placeholder: If user_persona is not set, create a minimal one
-    if state.get("user_persona") is None:
-        user_persona = UserPersona(
-            technical_skills=[],
-            career_goals=[],
-            preferred_startup_stage=None,
-            cultural_preferences=[],
-            user_id=state.get("candidate_id")
-        )
+    logger.info("Talent Strategist node: Processing conversation context")
+    
+    # Get current persona (may be None or empty dict)
+    current_persona = state.get("user_persona")
+    user_message = state.get("user_message")
+    chat_history = state.get("chat_history")
+    
+    # If no message provided, skip persona update
+    if not user_message:
+        logger.info("No user message provided, skipping persona update")
+        # Initialize empty persona if not present
+        if current_persona is None:
+            current_persona = {}
         return {
             **state,
-            "user_persona": user_persona
+            "user_persona": current_persona
+        }
+    
+    try:
+        # Initialize Talent Strategist agent
+        strategist = TalentStrategistAgent()
+        
+        # Update persona with new information
+        updated_persona = await strategist.update_persona(
+            current_persona=current_persona,
+            user_message=user_message,
+            chat_history=chat_history
+        )
+        
+        logger.info(
+            "persona_updated",
+            persona_keys=list(updated_persona.keys()) if updated_persona else [],
+            has_skills=bool(updated_persona.get("technical_skills")),
+            has_preferences=bool(updated_persona.get("preferred_company_stages") or updated_persona.get("preferred_locations"))
+        )
+        
+        return {
+            **state,
+            "user_persona": updated_persona
+        }
+        
+    except Exception as e:
+        logger.error(f"Error updating persona: {str(e)}", exc_info=True)
+        # Return state with existing persona on error
+        if current_persona is None:
+            current_persona = {}
+        return {
+            **state,
+            "user_persona": current_persona
         }
 
-    return state
+
+async def scout_node(state: MatchingState) -> MatchingState:
+    """
+    Job Scout Node - Generates search parameters from user persona.
+
+    This node:
+    - Takes user_persona from state
+    - Uses JobScoutAgent to generate search_filters and semantic_query
+    - Returns updated state with search parameters
+
+    Args:
+        state: Current matching state
+
+    Returns:
+        Updated state with search_filters and semantic_query
+    """
+    logger.info("Job Scout node: Generating search parameters from persona")
+    
+    user_persona = state.get("user_persona")
+    
+    try:
+        # Initialize Job Scout agent
+        scout = JobScoutAgent()
+        
+        # Generate search parameters from persona
+        search_params = await scout.create_search_params(user_persona=user_persona)
+        
+        semantic_query = search_params.get("semantic_query", "Software Engineer")
+        metadata_filters = search_params.get("metadata_filters")
+        filter_params = search_params.get("filter_params", {})
+        
+        logger.info(
+            "search_params_generated",
+            semantic_query=semantic_query,
+            has_metadata_filters=metadata_filters is not None,
+            filter_keys=list(filter_params.keys())
+        )
+        
+        return {
+            **state,
+            "semantic_query": semantic_query,
+            "search_filters": {
+                "metadata_filters": metadata_filters,
+                "filter_params": filter_params
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating search parameters: {str(e)}", exc_info=True)
+        # Return state with minimal search params on error
+        return {
+            **state,
+            "semantic_query": "Software Engineer",
+            "search_filters": {
+                "metadata_filters": None,
+                "filter_params": {}
+            }
+        }
 
 
 async def web_hunter_node(state: MatchingState) -> MatchingState:
@@ -471,9 +568,13 @@ async def fetch_candidate_node(state: MatchingState) -> MatchingState:
 
 async def search_vacancies_node(state: MatchingState) -> MatchingState:
     """
-    Node: Search for vacancies in Pinecone using filter {'type': 'vacancy'}.
+    Node: Search for vacancies in Pinecone using generated search parameters.
 
-    If candidate_embedding is not available, fetches it first.
+    This node:
+    - Uses semantic_query to generate query embedding
+    - Applies metadata_filters from Job Scout
+    - Searches Pinecone with filters
+    - Returns retrieved vacancies and scores
 
     Args:
         state: Current matching state
@@ -481,39 +582,91 @@ async def search_vacancies_node(state: MatchingState) -> MatchingState:
     Returns:
         Updated state with retrieved_vacancies and vacancy_scores
     """
-    # If candidate_embedding is not available, fetch it first
-    if not state.get("candidate_embedding"):
-        logger.info("Candidate embedding not found, fetching candidate first...")
-        state = await fetch_candidate_node(state)
-
-    candidate_embedding = state["candidate_embedding"]
+    # Get search parameters from state
+    semantic_query = state.get("semantic_query")
+    search_filters = state.get("search_filters", {})
+    metadata_filters = search_filters.get("metadata_filters") if search_filters else None
     top_k = state.get("top_k", 10)
+    
+    # If no semantic_query, fallback to candidate embedding or default query
+    if not semantic_query:
+        # If candidate_embedding is available, use it
+        if state.get("candidate_embedding"):
+            logger.info("Using candidate embedding for search (no semantic_query)")
+            query_vector = state["candidate_embedding"]
+        else:
+            # Fallback: generate embedding from default query
+            logger.info("Generating embedding from default query")
+            default_query = "Software Engineer"
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        f"{embedding_service_url}/embed",
+                        json={"texts": [default_query]}
+                    )
+                    response.raise_for_status()
+                    embeddings = response.json()["embeddings"]
+                    query_vector = embeddings[0]
+            except Exception as e:
+                logger.error(f"Error generating embedding: {str(e)}")
+                # If embedding generation fails, fetch candidate embedding
+                if not state.get("candidate_embedding"):
+                    state = await fetch_candidate_node(state)
+                query_vector = state["candidate_embedding"]
+    else:
+        # Generate embedding from semantic_query
+        logger.info(f"Generating embedding from semantic_query: {semantic_query}")
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{embedding_service_url}/embed",
+                    json={"texts": [semantic_query]}
+                )
+                response.raise_for_status()
+                embeddings = response.json()["embeddings"]
+                query_vector = embeddings[0]
+        except Exception as e:
+            logger.error(f"Error generating embedding from semantic_query: {str(e)}")
+            # Fallback to candidate embedding if available
+            if state.get("candidate_embedding"):
+                query_vector = state["candidate_embedding"]
+            else:
+                # Last resort: fetch candidate embedding
+                state = await fetch_candidate_node(state)
+                query_vector = state["candidate_embedding"]
 
-    # Search for vacancies using namespace "vacancies"
+    # Search Pinecone with filters
     pc_client = get_pinecone_client()
-    search_results = pc_client.search_vacancies(
-        query_vector=candidate_embedding,
+    
+    # Use query method directly to support filter_dict
+    search_results = pc_client.query(
+        query_vector=query_vector,
         top_k=top_k,
-        namespace="vacancies"
+        filter_dict=metadata_filters,
+        namespace="vacancies",
+        include_values=False
     )
 
     # Extract vacancies and scores
-    # search_results is already a list of dicts with 'id', 'metadata', 'score'
     retrieved_vacancies = []
     vacancy_scores = []
     for result in search_results:
-        # Ensure result is a dict (not a Pydantic model or other object)
         if isinstance(result, dict):
             retrieved_vacancies.append(result)
             vacancy_scores.append(result.get("score", 0.0))
         else:
-            # Convert to dict if needed
             retrieved_vacancies.append({
                 "id": getattr(result, "id", "unknown"),
                 "metadata": getattr(result, "metadata", {}),
                 "score": getattr(result, "score", 0.0)
             })
             vacancy_scores.append(getattr(result, "score", 0.0))
+
+    logger.info(
+        "vacancies_retrieved",
+        count=len(retrieved_vacancies),
+        has_filters=metadata_filters is not None
+    )
 
     return {
         **state,
@@ -647,17 +800,19 @@ def create_matching_graph() -> StateGraph:
 
     # Add nodes
     workflow.add_node("talent_strategist", talent_strategist_node)
+    workflow.add_node("scout", scout_node)
     workflow.add_node("web_hunter", web_hunter_node)
     workflow.add_node("search_vacancies", search_vacancies_node)
     workflow.add_node("rerank_and_explain", rerank_and_explain_node)
 
     # Define edges - new roadmap flow
-    # Entry -> talent_strategist -> web_hunter -> search_vacancies -> rerank_and_explain -> END
+    # Entry -> talent_strategist -> scout -> search_vacancies -> rerank_and_explain -> END
+    # Note: web_hunter is kept for future Firecrawl integration, but currently skipped
     # Note: fetch_candidate_node is called directly as a function within search_vacancies_node
     # if candidate_embedding is not available, so it doesn't need to be a separate graph node
     workflow.set_entry_point("talent_strategist")
-    workflow.add_edge("talent_strategist", "web_hunter")
-    workflow.add_edge("web_hunter", "search_vacancies")
+    workflow.add_edge("talent_strategist", "scout")
+    workflow.add_edge("scout", "search_vacancies")
     workflow.add_edge("search_vacancies", "rerank_and_explain")
     workflow.add_edge("rerank_and_explain", END)
 
@@ -686,12 +841,16 @@ async def run_match(match_request: MatchRequest) -> List[VacancyMatchResult]:
         "candidate_id": match_request.candidate_id,
         "candidate_embedding": [],
         "user_persona": None,
+        "user_message": None,
+        "chat_history": None,
         "raw_scraped_data": [],
         "retrieved_vacancies": [],
         "vacancy_scores": [],
         "match_results": [],
         "final_reports": [],
-        "top_k": match_request.top_k or 10
+        "top_k": match_request.top_k or 10,
+        "search_filters": None,
+        "semantic_query": None
     }
 
     # Run orchestrator

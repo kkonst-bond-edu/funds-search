@@ -1037,12 +1037,75 @@ with st.sidebar:
         st.rerun()
 
 # Main content tabs
-tab_chat, tab_search, tab_cv, tab_diagnostics = st.tabs([
+tab_chat, tab_search, tab_cv, tab_diagnostics, tab_admin = st.tabs([
     "💬 AI Recruiter",
     "🔍 Manual Search",
     "📊 Career & Match Hub",
-    "🛠️ Diagnostics"
+    "🛠️ Diagnostics",
+    "⚙️ Admin"
 ])
+
+# ============================================================================
+# TAB 5: ADMIN (Scraper Control)
+# ============================================================================
+with tab_admin:
+    st.header("⚙️ Admin & Scraper Control")
+    st.markdown("Manage data ingestion and scraper settings.")
+    
+    st.subheader("🚀 Scraper Settings")
+    
+    with st.form("scraper_config"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            remote_only = st.checkbox("Remote Only", value=True, help="Download only remote vacancies")
+            max_days_old = st.number_input("Max Days Old", min_value=0, value=0, help="0 = download all history")
+        
+        with col2:
+            locations = st.text_input("Include Locations (comma separated)", placeholder="London, Berlin, Europe")
+            keywords = st.text_input("Include Title Keywords (comma separated)", placeholder="Python, Backend, Senior")
+        
+        st.markdown("---")
+        st.caption("Advanced Filters")
+        col3, col4 = st.columns(2)
+        
+        with col3:
+            exclude_locations = st.text_input("Exclude Locations", placeholder="India, China")
+            exclude_keywords = st.text_input("Exclude Title Keywords", placeholder="Staff, Principal")
+            
+        with col4:
+            exclude_companies = st.text_input("Exclude Companies", placeholder="Company A, Company B")
+            include_categories = st.text_input("Include Categories", placeholder="Engineering, Product")
+
+        submit_scraper = st.form_submit_button("🚀 Start Scraper Job", type="primary", use_container_width=True)
+        
+        if submit_scraper:
+            # Prepare filter config
+            filters = {
+                "remote_only": remote_only,
+                "max_days_old": max_days_old if max_days_old > 0 else None,
+                "include_locations": [x.strip() for x in locations.split(",") if x.strip()],
+                "include_title_keywords": [x.strip() for x in keywords.split(",") if x.strip()],
+                "exclude_locations": [x.strip() for x in exclude_locations.split(",") if x.strip()],
+                "exclude_title_keywords": [x.strip() for x in exclude_keywords.split(",") if x.strip()],
+                "exclude_companies": [x.strip() for x in exclude_companies.split(",") if x.strip()],
+                "include_categories": [x.strip() for x in include_categories.split(",") if x.strip()],
+            }
+            
+            with st.spinner("Starting scraper job..."):
+                try:
+                    response = httpx.post(
+                        f"{BACKEND_API_URL}/api/v1/admin/scrape",
+                        json={"filters": filters},
+                        timeout=10.0
+                    )
+                    if response.status_code == 200:
+                        st.success("✅ Scraper started successfully in background!")
+                        st.json(filters)
+                    else:
+                        st.error(f"❌ Failed to start scraper: {response.text}")
+                except Exception as e:
+                    st.error(f"❌ Connection error: {str(e)}")
 
 # ============================================================================
 # TAB 1: AI RECRUITER (Chat Interface)
@@ -1066,52 +1129,52 @@ with tab_chat:
                 debug_info = message.get("debug_info", {})
                 search_stats = message.get("search_stats", {})
                 persona_applied = message.get("persona_applied", False)
-                
+            
                 # Check if persona is missing and show warning
                 has_persona = st.session_state.get("persona") is not None
                 if not has_persona:
                     st.warning("⚠️ **AI Matching is disabled.** Upload your CV to see how well you fit these roles.")
-                
+            
                 # Display search mode badge at the top (prominent visual indicator)
                 # Check persona_applied flag from API response instead of search_mode
                 persona_actually_applied = message.get("persona_applied", False)
-                
+            
                 if persona_actually_applied:
                     st.success("👤 **Persona Mode**: Matching based on your CV profile.")
                 else:
                     st.info("🌐 **Broad Search Mode**: General search without personalized matching.")
-                
+            
                 # Display friendly_reasoning at the top as Strategy Box
                 friendly_reasoning = debug_info.get("friendly_reasoning") if debug_info else None
                 if friendly_reasoning:
                     st.info(f"🛠️ **AI Search Strategy:** {friendly_reasoning}")
-                
+            
                 # Display search statistics header
                 if search_stats:
                     total_matches = search_stats.get("total_after_filters", len(vacancies))
                     initial_matches = search_stats.get("initial_vector_matches", len(vacancies))
                     db_size = search_stats.get("total_in_db")
-                    
+                
                     stats_text = f"**Found {total_matches} match{'es' if total_matches != 1 else ''}**"
                     if initial_matches and initial_matches != total_matches:
                         stats_text += f" (Filtered from {initial_matches} initial candidates)"
                     if db_size:
                         stats_text += f". Database size: {db_size}"
-                    
-                    st.info(f"📊 {stats_text}")
                 
+                    st.info(f"📊 {stats_text}")
+            
                 # Display raw JSON in expander for debugging
                 if debug_info:
                     with st.expander("🛠️ Technical Logs", expanded=False):
                         st.json(debug_info)
-                
+            
                 # Show top 5 vacancies but indicate if more exist
                 top_5_vacancies = vacancies[:5]
                 total_vacancies = len(vacancies)
-                
+            
                 for idx, vacancy in enumerate(top_5_vacancies):
                     display_vacancy_card(vacancy, idx)
-                
+            
                 # Indicate if more vacancies exist
                 if total_vacancies > 5:
                     st.info(f"📋 Showing top 5 results. {total_vacancies - 5} more vacancy/vacancies available.")
@@ -1158,7 +1221,7 @@ with tab_chat:
                     "persona": persona,  # Will be None if CV not uploaded
                     "history": history
                 }
-                
+            
                 # Debugging: Log persona data (hidden in expander for debugging)
                 with st.expander("🔍 Debug: Request Payload", expanded=False):
                     debug_payload = {
@@ -1190,6 +1253,26 @@ with tab_chat:
                 debug_info = result.get("debug_info", {})
                 persona_applied = result.get("persona_applied", False)
                 
+                # ========================================================================
+                # Save updated persona to session state (MEMORY PERSISTENCE)
+                # ========================================================================
+                # This ensures persona evolves over the conversation, remembering
+                # user preferences, skills, and requirements from previous messages
+                updated_persona = result.get("updated_persona")
+                if updated_persona:
+                    st.session_state.persona = updated_persona
+                    persona_keys = list(updated_persona.keys()) if isinstance(updated_persona, dict) else []
+                    logger.info(
+                        f"persona_updated_in_session: persona_keys={persona_keys}, "
+                        f"has_skills={bool(updated_persona.get('technical_skills'))}, "
+                        f"remote_only={updated_persona.get('remote_only')}, "
+                        f"preferred_company_stages={updated_persona.get('preferred_company_stages')}, "
+                        f"preferred_locations={updated_persona.get('preferred_locations')}"
+                    )
+                elif not st.session_state.get("persona"):
+                    # Initialize empty persona if not present
+                    st.session_state.persona = {}
+            
                 # Extract search statistics if available (from VacancySearchResponse structure)
                 # Note: The chat endpoint may not return these directly, but we can construct from available data
                 search_stats = {}
@@ -1269,9 +1352,9 @@ with tab_chat:
         ]
         st.rerun()
 
-# ============================================================================
-# TAB 2: MANUAL SEARCH (Filters + Search)
-# ============================================================================
+    # ============================================================================
+    # TAB 2: MANUAL SEARCH (Filters + Search)
+    # ============================================================================
 with tab_search:
     st.header("🔍 Manual Search")
     st.markdown("Search for vacancies using filters from the pre-indexed database.")
@@ -1295,7 +1378,7 @@ with tab_search:
             "Required Skills (comma-separated)", placeholder="e.g., Python, Kubernetes, Docker", key="search_skills"
         )
         location = st.text_input("Location", placeholder="e.g., San Francisco, Remote", key="search_location")
-        
+    
         # Additional filters from VacancyFilter schema
         category = st.selectbox(
             "Category",
@@ -1322,7 +1405,7 @@ with tab_search:
         series_a = st.checkbox("Series A", value=False, key="search_series_a")
         growth = st.checkbox("Growth", value=False, key="search_growth", help="Includes Series B, Series C, and Growth stage companies")
         public = st.checkbox("Public", value=False, key="search_public")
-        
+    
         # Employee count filters
         st.subheader("Employee Count")
         employees_1_10 = st.checkbox("1-10 employees", value=False, key="search_emp_1_10")
@@ -1347,7 +1430,7 @@ with tab_search:
     # Search button - use form to prevent page reload
     with st.form("search_form", clear_on_submit=False):
         search_clicked = st.form_submit_button("🔍 Search Database", type="primary", use_container_width=True)
-        
+    
         if search_clicked:
             # Build filter parameters
             filter_params = {}
@@ -1370,7 +1453,7 @@ with tab_search:
                 filter_params["category"] = category
             if experience_level:
                 filter_params["experience_level"] = experience_level
-            
+        
             # Build employee count list
             employee_counts = []
             if employees_1_10:
@@ -1401,7 +1484,7 @@ with tab_search:
                         response.raise_for_status()
                         result = response.json()
                         vacancies = result.get("vacancies", [])
-                        
+                    
                         # Remove duplicates by description_url
                         seen_urls = set()
                         unique_vacancies = []
@@ -1410,7 +1493,7 @@ with tab_search:
                             if url and url not in seen_urls:
                                 seen_urls.add(url)
                                 unique_vacancies.append(v)
-                        
+                    
                         # Store results in session state
                         st.session_state.search_results = unique_vacancies
                         st.session_state.search_performed = True
@@ -1434,7 +1517,7 @@ with tab_search:
                 st.info(f"💡 Cannot reach backend at {BACKEND_API_URL}. Check if the API service is running.")
             except Exception as e:
                 st.error(f"❌ Unexpected Error: {str(e)}")
-    
+
     # Display results (outside form to prevent reload)
     if st.session_state.search_performed and st.session_state.search_results:
         vacancies = st.session_state.search_results
@@ -1447,9 +1530,9 @@ with tab_search:
     elif st.session_state.search_performed and not st.session_state.search_results:
         st.info("🔍 No vacancies found matching your criteria. Try adjusting your filters.")
 
-# ============================================================================
-# TAB 3: CV ANALYSIS (Upload, Process, Match)
-# ============================================================================
+    # ============================================================================
+    # TAB 3: CV ANALYSIS (Upload, Process, Match)
+    # ============================================================================
 with tab_cv:
     st.header("📊 Career & Match Hub")
 
@@ -1497,7 +1580,7 @@ with tab_cv:
                     st.info(
                         f"**Resume ID:** {result.get('resume_id')}\n\n**Chunks Processed:** {result.get('chunks_processed')}"
                     )
-                    
+                
                     # Save persona to session state for personalized search
                     persona = result.get("persona")
                     if persona:
@@ -1511,7 +1594,7 @@ with tab_cv:
                             "resume_id": result.get('resume_id')
                         }
                         st.warning("⚠️ Persona not found in response, using basic structure.")
-                    
+                
                     # Debug: Show persona in state
                     st.write("Debug: Persona in state:", st.session_state.get("persona"))
 
@@ -1666,9 +1749,9 @@ with tab_cv:
                     st.error(f"❌ Error: {str(e)}")
                     logger.error(f"Match finding error: {str(e)}")
 
-# ============================================================================
-# TAB 4: DIAGNOSTICS (System Diagnostics)
-# ============================================================================
+    # ============================================================================
+    # TAB 4: DIAGNOSTICS (System Diagnostics)
+    # ============================================================================
 with tab_diagnostics:
     st.header("🛠️ System Diagnostics")
     st.markdown("Run a comprehensive health check on all backend services and dependencies.")
@@ -1889,11 +1972,11 @@ with tab_diagnostics:
             st.session_state.diagnostics_result = None
             st.rerun()
 
-# Footer
-st.markdown("---")
-st.markdown(
+    # Footer
+    st.markdown("---")
+    st.markdown(
     "<div style='text-align: center; color: #666; padding: 1rem;'>"
     "Autonomous Vacancy Hunter - Multi-Agent RAG Matching System"
     "</div>",
     unsafe_allow_html=True,
-)
+    )

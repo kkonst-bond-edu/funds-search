@@ -1,6 +1,6 @@
 # API Service
 
-FastAPI service for vacancy search and matching functionality.
+FastAPI service for vacancy search, matching, and orchestration functionality.
 
 ## Endpoints
 
@@ -46,111 +46,76 @@ Search for vacancies using structured filter parameters.
 
 #### POST `/api/v1/vacancies/chat`
 
-Conversational vacancy search using natural language. The AI agent interprets your message and extracts search parameters automatically.
+Conversational vacancy search using natural language. Delegates to the **LangGraph Orchestrator** to perform a multi-agent search.
 
 **Request Body:**
 ```json
 {
-  "message": "I want to work as a Python engineer in a series A AI startup"
+  "message": "I want to work as a Python engineer in a series A AI startup",
+  "persona": {
+    "technical_skills": ["Python", "Django"],
+    "preferred_company_stages": ["Series A"]
+  },
+  "history": [
+    {"role": "user", "content": "Hello"},
+    {"role": "assistant", "content": "Hi! How can I help?"}
+  ]
 }
 ```
 
 **Response:**
 ```json
 {
-  "vacancies": [
-    {
-      "title": "Senior Python Engineer",
-      "company_name": "AI Startup Inc",
-      "company_stage": "Series A",
-      "location": "San Francisco, CA",
-      "industry": "AI",
-      "salary_range": "$150k-$200k",
-      "description_url": "https://example.com/job",
-      "required_skills": ["Python", "FastAPI", "PostgreSQL"],
-      "remote_option": true
-    }
-  ],
-  "summary": "I found 3 matching vacancies for your search. These Python engineering roles at Series A AI startups match your criteria, with opportunities in San Francisco and remote positions available."
+  "vacancies": [...],
+  "summary": "I found 3 matching vacancies...",
+  "updated_persona": {
+    "technical_skills": ["Python", "Django", "FastAPI"],
+    ...
+  },
+  "search_stats": {
+    "total_after_filters": 3,
+    ...
+  },
+  "debug_info": { ... }
 }
 ```
 
-**Example Requests:**
-```bash
-# Search for Go developer in fintech
-curl -X POST "http://localhost:8000/api/v1/vacancies/chat" \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Looking for a Go dev in fintech"}'
+**How it works:**
+1. **Talent Strategist**: Updates the `persona` based on the `message` and `history`.
+2. **Job Scout**: Generates a hybrid search query (Semantic + Metadata Filters) from the updated persona.
+3. **Orchestrator**: Executes the search in Pinecone.
+4. **Response**: Returns vacancies, summary, and the updated persona (for the frontend to persist).
 
-# Search for Python engineer in series A AI startup
-curl -X POST "http://localhost:8000/api/v1/vacancies/chat" \
-  -H "Content-Type: application/json" \
-  -d '{"message": "I want to work as a Python engineer in a series A AI startup"}'
+#### POST `/match`
 
-# Search for remote React developer
-curl -X POST "http://localhost:8000/api/v1/vacancies/chat" \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Remote React developer positions"}'
+Run the matching orchestrator for a candidate-vacancy match request. Used when a candidate ID is known.
+
+**Request Body:**
+```json
+{
+  "candidate_id": "user_123",
+  "top_k": 10
+}
 ```
 
-**How it works:**
-1. The AI agent (`ChatSearchAgent`) interprets your natural language message
-2. Extracts search parameters: role, skills, industry, location, company_stage
-3. Performs vector search in Pinecone using embeddings
-4. Returns matching vacancies with an AI-generated summary explaining why they match
-
-**Extracted Parameters:**
-- `role`: Job title or role (e.g., "Software Engineer", "Python Developer")
-- `skills`: List of technical skills (e.g., ["Python", "Go", "React"])
-- `industry`: Industry sector (e.g., "Fintech", "AI", "Healthcare")
-- `location`: Job location (e.g., "San Francisco", "Remote", "New York")
-- `company_stage`: Company funding stage (e.g., "Seed", "Series A", "Growth")
-
-If a parameter is not mentioned in your message, it will be `null` and won't be used as a filter.
+**Response:**
+List of `VacancyMatchResult` objects with scores and reasoning.
 
 #### GET `/api/v1/vacancies/health`
 
 Health check endpoint for the vacancy search service.
-
-**Response:**
-```json
-{
-  "status": "ok",
-  "service": "vacancy-search",
-  "version": "1.0.0",
-  "firecrawl_configured": true
-}
-```
 
 ## Environment Variables
 
 - `DEEPSEEK_API_KEY`: Required for chat search functionality
 - `PINECONE_API_KEY`: Required for vector search
 - `EMBEDDING_SERVICE_URL`: URL of the embedding service (default: `http://embedding-service:8001`)
-- `FIRECRAWL_API_KEY`: Optional, for real-time vacancy fetching
-
-## Running Locally
-
-```bash
-# Start the API service
-cd apps/api
-uvicorn main:app --reload --port 8000
-
-# Test the chat endpoint
-curl -X POST "http://localhost:8000/api/v1/vacancies/chat" \
-  -H "Content-Type: application/json" \
-  -d '{"message": "I want to work as a Python engineer in a series A AI startup"}'
-```
+- `CV_PROCESSOR_URL`: URL of the CV processor service (default: `http://cv-processor:8001`)
 
 ## Architecture
 
-The chat search endpoint uses:
-- **ChatSearchAgent**: Interprets natural language and generates summaries
-- **DeepSeek LLM**: Via `LLMProviderFactory` for AI processing
-- **VectorStore**: Pinecone for semantic search
-- **Embedding Service**: Generates query embeddings
+The API service acts as a gateway to the **Orchestrator**. It doesn't contain heavy business logic itself but routes requests to the appropriate LangGraph workflows.
 
-
-
-
-
+- **FastAPI**: Handles HTTP requests and validation.
+- **LangGraph**: Manages state and agent execution.
+- **Agents**: Talent Strategist, Job Scout, Matchmaker.

@@ -29,7 +29,8 @@ from shared.schemas import (
     SystemDiagnosticsResponse,
     VacancyMatchResult,
 )
-from typing import List
+from typing import List, Dict, Optional, Any
+from pydantic import BaseModel
 
 # Import vacancies router
 # Note: PYTHONPATH should be set to project root, no manual sys.path manipulation needed
@@ -56,6 +57,18 @@ app.add_middleware(
 # Include routers
 app.include_router(vacancies_router)
 
+
+from src.services.scraper.main import main as run_scraper_logic
+
+class ScraperRequest(BaseModel):
+    filters: Optional[Dict[str, Any]] = None
+
+@app.post("/api/v1/admin/scrape")
+async def trigger_scrape(request: ScraperRequest):
+    """Trigger the scraper with optional filters."""
+    # Run in background to avoid blocking API
+    asyncio.create_task(run_scraper_logic(filter_config=request.filters))
+    return {"status": "started", "filters": request.filters}
 
 @app.get("/")
 async def root():

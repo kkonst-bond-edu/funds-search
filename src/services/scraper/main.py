@@ -9,111 +9,51 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import List, Set, Dict
+from typing import List, Set, Dict, Optional, Any
+from src.services.scraper.filter_service import VacancyFilterService, FilterConfig
 
 from src.services.scraper.core.browser import BrowserManager
 from src.services.scraper.core.engine import ScraperEngine
 from src.services.scraper.core.ingest_manager import IngestManager
 from src.services.scraper.providers.a16z import A16ZScraper
-from src.schemas.vacancy import Vacancy
-
-# Maximum number of vacancies to process per run
-MAX_PROCESS_PER_RUN = 300
-
-# Configure basic logger for console output
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    handler.setLevel(logging.INFO)
-    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-
-
-def load_existing_vacancies(dump_path: Path) -> List[dict]:
-    """
-    Load existing vacancies from vacancies_dump.json.
-    
-    Args:
-        dump_path: Path to vacancies_dump.json file
-        
-    Returns:
-        List of vacancy dictionaries, or empty list if file doesn't exist
-    """
+def load_existing_vacancies(dump_path: Path) -> List[Dict[str, Any]]:
+    """Load existing vacancies from the dump file."""
     if not dump_path.exists():
-        logger.info(f"Vacancies dump file not found: {dump_path}, starting with empty list")
         return []
     
+    existing_vacancies = []
     try:
-        with open(dump_path, "r", encoding="utf-8") as f:
-            vacancies = json.load(f)
-        if not isinstance(vacancies, list):
-            logger.warning(f"Invalid format in {dump_path}, expected list, got {type(vacancies).__name__}")
-            return []
-        logger.info(f"Loaded {len(vacancies)} existing vacancies from {dump_path}")
-        return vacancies
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse JSON from {dump_path}: {str(e)}")
-        return []
+        with open(dump_path, "r") as f:
+            for line in f:
+                if line.strip():
+                    try:
+                        existing_vacancies.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
     except Exception as e:
-        logger.error(f"Error loading vacancies from {dump_path}: {str(e)}")
-        return []
-
-
-def get_existing_urls(vacancies: List[dict]) -> Set[str]:
-    """
-    Extract description_urls from existing vacancies to check for duplicates.
-    
-    Args:
-        vacancies: List of vacancy dictionaries
+        logger.error(f"Error loading existing vacancies: {e}")
         
-    Returns:
-        Set of description URLs
-    """
+    return existing_vacancies
+
+def get_existing_urls(vacancies: List[Dict[str, Any]]) -> Set[str]:
+    """Extract a set of existing URLs from vacancies."""
     urls = set()
-    for vacancy in vacancies:
-        url = vacancy.get("description_url")
-        if url:
-            urls.add(url)
+    for v in vacancies:
+        if isinstance(v, str):
+            # If v is a string (e.g. JSON string), try to parse it
+            try:
+                v = json.loads(v)
+            except json.JSONDecodeError:
+                continue
+                
+        if isinstance(v, dict):
+            url = v.get("description_url")
+            if url:
+                urls.add(url)
     return urls
 
-
-def append_vacancy_to_dump(vacancy: Vacancy, dump_path: Path) -> None:
-    """
-    Atomically append a single vacancy to vacancies_dump.json.
-    Uses atomic write (write to temp file, then rename) to prevent data loss on crash.
-    
-    Args:
-        vacancy: Vacancy object to append
-        dump_path: Path to vacancies_dump.json file
-    """
-    import tempfile
-    import shutil
-    
-    # Load existing vacancies
-    existing_vacancies = load_existing_vacancies(dump_path)
-    
-    # Convert new vacancy to dict
-    vacancy_dict = vacancy.dict()
-    
-    # Append to list
-    existing_vacancies.append(vacancy_dict)
-    
-    # Atomic write: write to temp file first, then rename
-    temp_file = dump_path.with_suffix('.tmp')
-    try:
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(existing_vacancies, f, indent=2, ensure_ascii=False)
-        # Atomic rename (works on Unix and Windows)
-        temp_file.replace(dump_path)
-        logger.info(f"Atomically appended vacancy to {dump_path}: {vacancy.title} at {vacancy.company_name}")
-    except Exception as e:
-        # Clean up temp file on error
-        if temp_file.exists():
-            temp_file.unlink()
-        raise
-
+# Max vacancies to process per run
+MAX_PROCESS_PER_RUN = 50
 
 async def process_vacancy(
     link: str,
@@ -125,137 +65,65 @@ async def process_vacancy(
     stats: Dict[str, int],
     lock: asyncio.Lock,
 ) -> None:
-    """
-    Process a single vacancy: extraction, saving to dump, and uploading to Pinecone.
-    
-    Args:
-        link: URL of the vacancy to process
-        semaphore: Semaphore to limit concurrent browser pages
-        a16z_scraper: A16Z scraper instance
-        ingest_manager: Ingest manager instance
-        dump_path: Path to vacancies_dump.json
-        existing_urls: Set of already processed URLs (thread-safe access via lock)
-        stats: Dictionary with counters (new_count, processed_count, skipped_count)
-        lock: Lock for thread-safe access to shared resources
-    """
+    """Process a single vacancy link."""
     async with semaphore:
         try:
-            # Set timeout for the entire vacancy processing (180 seconds)
-            # Increased to 180s to handle slow-loading job boards and embedding service delays
-            await asyncio.wait_for(
-                _process_vacancy_internal(
-                    link, a16z_scraper, ingest_manager, dump_path, existing_urls, stats, lock
-                ),
-                timeout=180.0
-            )
-        except asyncio.TimeoutError:
-            logger.error(f"Timeout processing vacancy (180s exceeded): {link}")
+            logger.info(f"Processing: {link}")
+            
+            # Fetch details
+            raw_html = await a16z_scraper.fetch_job_details(link)
+            if not raw_html:
+                logger.warning(f"Failed to fetch HTML for {link}")
+                return
+                
+            # Parse
+            parsed_data = await a16z_scraper.parse_job_page(raw_html, link)
+            if not parsed_data:
+                logger.warning(f"Failed to parse data for {link}")
+                return
+                
+            # Process and Ingest
+            success = await ingest_manager.process_new_vacancy(parsed_data)
+            
+            if success:
+                # Save to dump file safely with lock
+                async with lock:
+                    with open(dump_path, "a") as f:
+                        f.write(json.dumps(parsed_data, default=str) + "\n")
+                    
+                    stats["new_count"] += 1
+                    stats["processed_count"] += 1
+                    existing_urls.add(link)
+                    logger.info(f"Successfully processed and saved: {parsed_data.get('title', 'Unknown')}")
+            else:
+                 async with lock:
+                    stats["skipped_count"] += 1
+                    
         except Exception as e:
-            logger.error(
-                f"Failed to process vacancy {link}: {str(e)}",
-                exc_info=True,
-            )
+            logger.error(f"Error processing {link}: {str(e)}")
 
 
-async def _process_vacancy_internal(
-    link: str,
-    a16z_scraper: A16ZScraper,
-    ingest_manager: IngestManager,
-    dump_path: Path,
-    existing_urls: Set[str],
-    stats: Dict[str, int],
-    lock: asyncio.Lock,
-) -> None:
+logger = logging.getLogger(__name__)
+
+# ... (imports)
+
+async def main(filter_config: Optional[Dict[str, Any]] = None) -> None:
     """
-    Internal function to process a vacancy (without semaphore, called within timeout).
+    Main async function to run the scraper.
     
     Args:
-        link: URL of the vacancy to process
-        a16z_scraper: A16Z scraper instance
-        ingest_manager: Ingest manager instance
-        dump_path: Path to vacancies_dump.json
-        existing_urls: Set of already processed URLs
-        stats: Dictionary with counters
-        lock: Lock for thread-safe access
+        filter_config: Optional dictionary with filter configuration
     """
-    # FIRST: Check if this vacancy is already processed in vacancies_dump.json (thread-safe)
-    # This prevents re-processing if script was interrupted and restarted
-    async with lock:
-        if link in existing_urls:
-            stats["skipped_count"] += 1
-            logger.info(f"Skipping already processed vacancy: {link}")
-            return
-    
-    # Extract vacancy details (only if not already processed)
-    try:
-        vacancy = await a16z_scraper.extract_details(link)
-    except Exception as e:
-        logger.error(
-            f"Failed to extract vacancy from {link}: {str(e)}",
-            exc_info=True,
-        )
-        return
-    
-    # Check for data quality: skip if both title and company contain 'Unknown'
-    if "Unknown" in vacancy.title and "Unknown" in vacancy.company_name:
-        logger.warning(
-            f"Skipping vacancy with poor data quality - both title and company contain 'Unknown'. "
-            f"Title: '{vacancy.title}', Company: '{vacancy.company_name}'. "
-            f"URL: {link}"
-        )
-        async with lock:
-            stats["skipped_count"] += 1
-        return
-    
-    # This is a new vacancy
-    async with lock:
-        stats["new_count"] += 1
-        logger.info(f"Processing new vacancy: {vacancy.title} at {vacancy.company_name}")
-    
-    # FIRST: Process vacancy through ingest_manager (AI classification + Pinecone upload)
-    # This updates the vacancy object with AI-classified fields (category, industry, experience_level, etc.)
-    try:
-        success = await ingest_manager.process_new_vacancy(vacancy)
-        if success:
-            async with lock:
-                stats["processed_count"] += 1
-            logger.info(f"Successfully processed and uploaded vacancy: {vacancy.title}")
-        else:
-            logger.warning(f"Failed to process vacancy: {vacancy.title}")
-    except Exception as e:
-        logger.error(
-            f"Failed to process vacancy in Pinecone: {vacancy.title} - {str(e)}",
-            exc_info=True,
-        )
-    
-    # IMMEDIATELY AFTER successful extraction: Save vacancy to vacancies_dump.json atomically
-    # This ensures progress is saved even if Pinecone upload fails later
-    # The vacancy object includes all extracted fields (raw_html_url, etc.)
-    try:
-        # Use lock to ensure thread-safe file writing
-        async with lock:
-            append_vacancy_to_dump(vacancy, dump_path)
-            # Update existing_urls to prevent duplicates in the same run
-            existing_urls.add(vacancy.description_url)
-            logger.info(f"Saved vacancy to dump (atomic write): {vacancy.title} at {vacancy.company_name}")
-    except Exception as e:
-        logger.error(
-            f"Failed to save vacancy to dump: {vacancy.title} - {str(e)}",
-            exc_info=True,
-        )
-    
-    # Add 1-second delay after processing each vacancy to reduce CPU and memory pressure
-    # This helps prevent timeouts and resource exhaustion on local machines during scraping
-    await asyncio.sleep(1)
-
-
-async def main() -> None:
-    """Main async function to run the scraper."""
     # Get project root
     project_root = Path(__file__).parent.parent.parent.parent
     dump_path = project_root / "vacancies_dump.json"
     
     logger.info("Starting scraper main process")
+    
+    # Initialize Filter Service
+    config = FilterConfig(**(filter_config or {}))
+    filter_service = VacancyFilterService(config)
+    logger.info(f"Initialized FilterService with config: {config.dict()}")
     
     # Initialize BrowserManager and use as async context manager
     logger.info("Initializing BrowserManager")
@@ -273,9 +141,9 @@ async def main() -> None:
         logger.info("Initializing ScraperEngine")
         engine = ScraperEngine(scrapers=[a16z_scraper])
         
-        # Initialize IngestManager
-        logger.info("Initializing IngestManager")
-        ingest_manager = IngestManager()
+        # Initialize IngestManager with remote_only setting
+        logger.info(f"Initializing IngestManager (remote_only={filter_service.config.remote_only})")
+        ingest_manager = IngestManager(remote_only=filter_service.config.remote_only)
         
         try:
             # Load existing vacancies to check for duplicates
@@ -288,10 +156,28 @@ async def main() -> None:
             all_links = await a16z_scraper.fetch_all_links()
             logger.info(f"Found {len(all_links)} job links total")
             
-            # FIRST: Filter out already processed links (check vacancies_dump.json)
+            # PRE-FILTER: Filter links using FilterService based on metadata available from list page
+            links_to_process = []
+            skipped_by_filter = 0
+            
+            for link in all_links:
+                # Get metadata from scraper cache
+                metadata = a16z_scraper._job_metadata.get(link, {})
+                if filter_service.should_process(metadata):
+                    links_to_process.append(link)
+                else:
+                    skipped_by_filter += 1
+            
+            logger.info(f"Filter Service: {skipped_by_filter} links skipped, {len(links_to_process)} links passed")
+
+            # Filter out already processed links (check vacancies_dump.json)
             # This prevents re-processing if script was interrupted and restarted
-            links_to_process = [link for link in all_links if link not in existing_urls]
-            logger.info(f"Found {len(links_to_process)} new vacancies to process (skipping {len(all_links) - len(links_to_process)} already processed)")
+            # Only check for existing URLs if they are not in the filtered list (to avoid double counting)
+            new_links_to_process = [link for link in links_to_process if link not in existing_urls]
+            
+            logger.info(f"Found {len(new_links_to_process)} new vacancies to process (skipping {len(all_links) - len(links_to_process)} filtered, {len(links_to_process) - len(new_links_to_process)} already processed)")
+            
+            links_to_process = new_links_to_process
             
             # Limit to MAX_PROCESS_PER_RUN to process in batches
             if len(links_to_process) > MAX_PROCESS_PER_RUN:
@@ -308,7 +194,7 @@ async def main() -> None:
             stats = {
                 "new_count": 0,
                 "processed_count": 0,
-                "skipped_count": len(all_links) - len(links_to_process),
+                "skipped_count": (len(all_links) - len(links_to_process)), # Total skipped
             }
             lock = asyncio.Lock()
             

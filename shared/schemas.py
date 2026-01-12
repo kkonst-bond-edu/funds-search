@@ -86,6 +86,31 @@ class UserPersona(BaseModel):
     preferred_startup_stage: Optional[str] = Field(None, description="Preferred startup stage: Seed, Series A, Series B, Series C, Series D, Series E, IPO, or Public")
     cultural_preferences: List[str] = Field(default_factory=list, description="Cultural preferences and values")
     user_id: Optional[str] = Field(None, description="User ID associated with this persona")
+    
+    # Structured preferences that map to database filters
+    preferred_company_stages: List[str] = Field(
+        default_factory=list, 
+        description="Preferred company funding stages (e.g., ['Seed', 'Series A', 'Growth', 'Public'])"
+    )
+    preferred_locations: List[str] = Field(
+        default_factory=list, 
+        description="Preferred job locations (e.g., ['San Francisco', 'Remote', 'London'])"
+    )
+    salary_min: Optional[int] = Field(
+        None, 
+        ge=0, 
+        description="Minimum salary requirement in USD"
+    )
+    remote_only: bool = Field(
+        False, 
+        description="Whether the candidate only wants remote positions"
+    )
+    
+    # Unstructured context for storing insights from conversation
+    chat_context: Optional[str] = Field(
+        None, 
+        description="Unstructured insights and context extracted from chat conversations"
+    )
 
 
 class MatchingReport(BaseModel):

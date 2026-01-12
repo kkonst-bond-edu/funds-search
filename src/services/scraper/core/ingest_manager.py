@@ -182,16 +182,89 @@ def slugify(text: str) -> str:
     return text
 
 
+def canonicalize_url(url: str) -> str:
+    """
+    Canonicalize URL by removing tracking parameters and sorting query params.
+    
+    Args:
+        url: Input URL
+        
+    Returns:
+        Canonicalized URL
+    """
+    if not url:
+        return ""
+    
+    try:
+        from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+        
+        parsed = urlparse(url)
+        
+        # known tracking parameters to remove
+        TRACKING_PARAMS = {
+            'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+            'ref', 'source', 'gh_src', 'gh_ref', 's', 'fbclid', 'gclid', 
+            '_hsenc', '_hsmi', 'mc_cid', 'mc_eid'
+        }
+        
+        # Parse query parameters
+        query_params = parse_qsl(parsed.query, keep_blank_values=True)
+        
+        # Filter and sort parameters
+        filtered_params = [
+            (k, v) for k, v in query_params 
+            if k.lower() not in TRACKING_PARAMS
+        ]
+        filtered_params.sort()
+        
+        # Rebuild query string
+        new_query = urlencode(filtered_params)
+        
+        # Rebuild URL
+        new_parts = list(parsed)
+        new_parts[4] = new_query
+        
+        return urlunparse(new_parts)
+    except Exception as e:
+        logger.warning(f"Failed to canonicalize URL {url}: {e}")
+        return url
+
+def generate_dedup_signature(company_name: str, title: str, location: str) -> str:
+    """
+    Generate a signature for content-based deduplication.
+    
+    Signature = MD5(slugify(company) + slugify(title) + slugify(location))
+    
+    Args:
+        company_name: Company name
+        title: Job title
+        location: Job location
+        
+    Returns:
+        MD5 hash string of the signature
+    """
+    # Normalize components
+    c_slug = slugify(company_name)
+    t_slug = slugify(title)
+    l_slug = slugify(location)
+    
+    # Create signature string
+    sig_str = f"{c_slug}|{t_slug}|{l_slug}"
+    
+    # Return hash
+    return hashlib.md5(sig_str.encode('utf-8')).hexdigest()
+
 def generate_vacancy_id(company_name: str, title: str, description_url: str) -> str:
     """
     Generate an absolutely unique slugified ID for a vacancy using URL hash.
     
     Format: {slugify(company_name)}-{slugify(title)}-{hash_prefix}
     
-    The MD5 hash of the description_url ensures absolute uniqueness:
+    The MD5 hash of the CANONICALIZED description_url ensures absolute uniqueness:
     - Different companies with the same job titles get unique IDs
     - Same URL re-scraped will generate the same ID (allows updates without duplicates)
     - Prevents collisions when multiple companies have identical job titles
+    - Handles URL variations (tracking params) by canonicalizing first
     
     Args:
         company_name: Company name
@@ -204,10 +277,13 @@ def generate_vacancy_id(company_name: str, title: str, description_url: str) -> 
     company_slug = slugify(company_name)
     title_slug = slugify(title)
     
+    # Canonicalize URL before hashing to ensure stable ID across tracking param variations
+    canonical_url = canonicalize_url(description_url)
+    
     # Calculate MD5 hash of the description_url and take first 6 characters
     # This ensures absolute uniqueness and allows re-scraping the same URL
     # to update data without creating duplicates
-    hash_prefix = hashlib.md5(description_url.encode('utf-8')).hexdigest()[:6]
+    hash_prefix = hashlib.md5(canonical_url.encode('utf-8')).hexdigest()[:6]
     
     return f"{company_slug}-{title_slug}-{hash_prefix}"
 
@@ -377,18 +453,17 @@ class IngestManager:
         self,
         embedding_service_url: Optional[str] = None,
         pinecone_index_name: Optional[str] = None,
+        remote_only: bool = False,
     ) -> None:
         """
         Initialize the ingest manager.
         
         Args:
             embedding_service_url: URL of the embedding service.
-                                 Defaults to EMBEDDING_SERVICE_URL env var or
-                                 "http://embedding-service:8001"
             pinecone_index_name: Pinecone index name.
-                                Defaults to PINECONE_INDEX_NAME env var or
-                                "funds-search"
+            remote_only: Whether to only process remote vacancies.
         """
+        self.remote_only = remote_only
         self.embedding_service_url = embedding_service_url or os.getenv(
             "EMBEDDING_SERVICE_URL", "http://embedding-service:8001"
         )
@@ -564,6 +639,12 @@ class IngestManager:
         if not self._validate_vacancy(vacancy):
             logger.error(f"Vacancy validation failed: {vacancy.title} at {vacancy.company_name}")
             return False
+            
+        # CRITICAL: Remote Only Filter
+        # If remote_only is enabled, we check the vacancy's remote_option after classification
+        # But we can also do a quick check here if possible, though classification is better
+        # We'll check it again after classification logic below
+
         
         try:
             # AI Classification: Classify vacancy before generating embedding
@@ -841,7 +922,15 @@ class IngestManager:
                             updated_fields.append(f"remote_option={vacancy.remote_option}")
                             logger.debug(f"Updated remote_option from AI: {vacancy.remote_option}")
                     
+                    # --- LEVEL 2 FILTER: Remote Only Check ---
+                    if self.remote_only:
+                        if not vacancy.remote_option:
+                            logger.info(f"Skipping vacancy '{vacancy.title}' (remote_option={vacancy.remote_option}) due to remote_only=True setting")
+                            return False
+                    # ----------------------------------------
+
                     # Debug logging: Show exactly which fields were updated vs protected
+
                     if updated_fields or protected_fields:
                         log_parts = []
                         if updated_fields:
@@ -1146,6 +1235,14 @@ class IngestManager:
             # Prepare metadata with all fields, using defaults for missing values
             # All values should be strings (except remote_option which is bool) to match search filters
             # required_skills is always a List[str]
+            
+            # Generate deduplication signature
+            dedup_signature = generate_dedup_signature(
+                vacancy.company_name or "",
+                vacancy.title or "",
+                vacancy.location or ""
+            )
+            
             # NOTE: These values reflect the "protected" API data that takes precedence over AI:
             # - industry: Preserves specific API values (e.g., "American Dynamism") over generic AI "Technology"
             # - remote_option: Preserves True from API, won't be overwritten by AI False
@@ -1166,6 +1263,7 @@ class IngestManager:
                 "is_hybrid": vacancy.is_hybrid if vacancy.is_hybrid is not None else False,
                 "description_url": vacancy.description_url or "",
                 "required_skills": vacancy.required_skills if vacancy.required_skills else [],  # Protected: API tags prioritized
+                "dedup_signature": dedup_signature, # Content-based deduplication signature
             }
             
             # Add optional fields if present
@@ -1222,7 +1320,16 @@ class IngestManager:
             metadata = {k: v for k, v in metadata.items() if v is not None}
             
             # Check for duplicates by description_url before upserting
-            existing_id = self.vector_store.check_duplicate_by_url(vacancy.description_url, namespace=namespace)
+            # Use canonical URL for checking to catch variants
+            canonical_url = canonicalize_url(vacancy.description_url)
+            
+            # Check with canonical URL first (future proof)
+            existing_id = self.vector_store.check_duplicate_by_url(canonical_url, namespace=namespace)
+            
+            # If not found, check with original URL (backward compatibility for existing records)
+            if not existing_id and vacancy.description_url != canonical_url:
+                existing_id = self.vector_store.check_duplicate_by_url(vacancy.description_url, namespace=namespace)
+                
             if existing_id:
                 if existing_id != vacancy_id:
                     # Different ID but same URL - delete the old one and use the new ID
@@ -1231,6 +1338,42 @@ class IngestManager:
                 else:
                     # Same ID - this is an update, which is fine
                     logger.info(f"Updating existing vacancy: {vacancy_id}")
+            
+            # Update vacancy description_url to canonical version for storage
+            # This ensures future consistency
+            metadata["description_url"] = canonical_url
+
+            # Check for CONTENT-BASED duplicates (Title + Company + Location)
+            # This handles cases like "Intern" at "Rappi" having multiple req IDs (URLs)
+            # We want to skip uploading if a functional duplicate already exists
+            # We use the dedup_signature we just generated
+            try:
+                # Query by dedup_signature
+                # Need to implement this in VectorStore or use raw query
+                # Using check_duplicate_by_url pattern but with filter
+                dummy_vector = [0.0] * 1024
+                content_dupe_results = self.vector_store.index.query(
+                    vector=dummy_vector,
+                    top_k=1,
+                    include_metadata=True,
+                    filter={"dedup_signature": {"$eq": dedup_signature}},
+                    namespace=namespace
+                )
+                
+                if content_dupe_results.matches:
+                    existing_match = content_dupe_results.matches[0]
+                    existing_match_id = existing_match.id
+                    
+                    # If ID is different, it means we found a different record (URL) with SAME content
+                    if existing_match_id != vacancy_id:
+                        logger.warning(
+                            f"Skipping functional duplicate for {vacancy.title} at {vacancy.company_name} ({vacancy.location}). "
+                            f"Existing ID: {existing_match_id}, New ID: {vacancy_id}"
+                        )
+                        return False # Skip upsert
+            except Exception as e:
+                logger.warning(f"Error checking content duplicates: {e}")
+                # Continue if check fails
             
             # Prepare vector for Pinecone
             vector = {

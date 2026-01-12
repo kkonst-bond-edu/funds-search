@@ -17,10 +17,68 @@ if str(project_root) not in sys.path:
 from shared.pinecone_client import VectorStore
 from src.schemas.vacancy import Vacancy
 import logging
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Try to load .env from current directory or project root
+load_dotenv()
+# Explicitly try project root if not found
+project_root = Path(__file__).parent.parent.parent
+env_path = project_root / '.env'
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def canonicalize_url(url: str) -> str:
+    """
+    Canonicalize URL by removing tracking parameters and sorting query params.
+    
+    Args:
+        url: Input URL
+        
+    Returns:
+        Canonicalized URL
+    """
+    if not url:
+        return ""
+    
+    try:
+        from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+        
+        parsed = urlparse(url)
+        
+        # known tracking parameters to remove
+        TRACKING_PARAMS = {
+            'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+            'ref', 'source', 'gh_src', 'gh_ref', 's', 'fbclid', 'gclid', 
+            '_hsenc', '_hsmi', 'mc_cid', 'mc_eid'
+        }
+        
+        # Parse query parameters
+        query_params = parse_qsl(parsed.query, keep_blank_values=True)
+        
+        # Filter and sort parameters
+        filtered_params = [
+            (k, v) for k, v in query_params 
+            if k.lower() not in TRACKING_PARAMS
+        ]
+        filtered_params.sort()
+        
+        # Rebuild query string
+        new_query = urlencode(filtered_params)
+        
+        # Rebuild URL
+        new_parts = list(parsed)
+        new_parts[4] = new_query
+        
+        return urlunparse(new_parts)
+    except Exception as e:
+        logger.warning(f"Failed to canonicalize URL {url}: {e}")
+        return url
 
 def find_duplicates(vector_store: VectorStore, namespace: str = "vacancies") -> Dict[str, List[str]]:
     """
@@ -47,21 +105,42 @@ def find_duplicates(vector_store: VectorStore, namespace: str = "vacancies") -> 
         logger.error(f"Error querying Pinecone: {e}")
         return {}
     
-    # Group by description_url
-    url_to_ids: Dict[str, List[str]] = defaultdict(list)
+    total_vectors = len(results.matches)
+    print(f"DEBUG: Total vectors found in Pinecone: {total_vectors}")
+    logger.info(f"Total vectors found in Pinecone: {total_vectors}")
+
+    # Group by (Title, Company, Location) tuple to find content duplicates
+    # normalizing case and stripping whitespace
+    content_to_ids: Dict[tuple, List[tuple]] = defaultdict(list)  # Store (id, url) tuples
+    missing_content_count = 0
     
     for match in results.matches:
         metadata = match.metadata or {}
-        description_url = metadata.get("description_url", "")
+        title = str(metadata.get("title", "")).strip().lower()
+        company = str(metadata.get("company_name", "")).strip().lower()
+        location = str(metadata.get("location", "")).strip().lower()
         vector_id = match.id
+        url = str(metadata.get("description_url", ""))
         
-        if description_url:
-            url_to_ids[description_url].append(vector_id)
+        if title and company:
+            # Create a content key
+            key = (title, company, location)
+            content_to_ids[key].append((vector_id, url))
+        else:
+            missing_content_count += 1
+            
+    logger.info(f"Vectors with missing title or company: {missing_content_count}")
     
-    # Filter to only duplicates (more than 1 ID per URL)
-    duplicates = {url: ids for url, ids in url_to_ids.items() if len(ids) > 1}
+    # Filter to only duplicates (more than 1 ID per content key)
+    duplicates = {}
+    for key, items in content_to_ids.items():
+        if len(items) > 1:
+            # Store as string key with readable format
+            title, company, location = key
+            key_str = f"Title: '{title}' | Company: '{company}' | Location: '{location}'"
+            duplicates[key_str] = items
     
-    logger.info(f"Found {len(duplicates)} URLs with duplicates")
+    logger.info(f"Found {len(duplicates)} content groups with duplicates")
     total_duplicate_vectors = sum(len(ids) - 1 for ids in duplicates.values())
     logger.info(f"Total duplicate vectors to remove: {total_duplicate_vectors}")
     
@@ -89,15 +168,16 @@ def remove_duplicates(vector_store: VectorStore, namespace: str = "vacancies", d
     removed_count = 0
     ids_to_delete = []
     
-    for url, ids in duplicates.items():
-        # Keep the first ID (or could sort by timestamp if available)
-        # For now, keep the first one and delete the rest
-        ids_to_keep = ids[0]
-        ids_to_remove = ids[1:]
+    for content_key, items in duplicates.items():
+        # items is list of (vector_id, url) tuples
+        # Keep the first one and delete the rest
+        ids_to_keep, url_to_keep = items[0]
+        ids_to_remove = [item[0] for item in items[1:]]
+        urls_to_remove = [item[1] for item in items[1:]]
         
-        logger.info(f"URL: {url}")
-        logger.info(f"  Keeping: {ids_to_keep}")
-        logger.info(f"  Removing: {ids_to_remove}")
+        logger.info(f"Content: {content_key}")
+        logger.info(f"  Keeping: {ids_to_keep} (URL: {url_to_keep})")
+        logger.info(f"  Removing: {ids_to_remove} (URLs: {urls_to_remove})")
         
         ids_to_delete.extend(ids_to_remove)
         removed_count += len(ids_to_remove)
