@@ -492,6 +492,7 @@ class A16ZScraper(BaseScraper):
                                 "location_string": job.get("location_string"),  # Store location_string for fallback
                                 "company_name": company_name,  # Already uses unquote in _get_company_from_url if from URL
                                 "stage": job.get("stage") or job.get("companyStage") or job.get("company_stage") or job.get("stages"),  # Company funding stage
+                                "published_at": job.get("postedAt") or job.get("publishedAt") or job.get("createdAt") or job.get("date"),
                             }
                             all_links.append(link)
                     
@@ -1320,6 +1321,24 @@ class A16ZScraper(BaseScraper):
                     if not stages and not counts:
                          company_stage = stage_text # Fallback to full text if parsing failed
             
+            # ========== EXTRACT PUBLISHED DATE ==========
+            published_at = None
+            raw_date = cached.get("published_at")
+            if raw_date:
+                try:
+                    # Handle timestamp (int/float)
+                    if isinstance(raw_date, (int, float)):
+                        # Assume seconds if small, ms if large
+                        if raw_date > 10000000000: # ms
+                            published_at = datetime.fromtimestamp(raw_date / 1000)
+                        else:
+                            published_at = datetime.fromtimestamp(raw_date)
+                    elif isinstance(raw_date, str):
+                        # Simple ISO parsing
+                        published_at = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+                except Exception as e:
+                    logger.warning(f"Failed to parse published_at: {raw_date}, error: {e}")
+
             # Verify that we're using the cleaned/formatted values:
             # - salary_range: Robustly cleaned from list format (e.g., [206000, 310000] -> "$206,000 - $310,000")
             # - required_skills: ONLY from cached data (tags, categories, departments) - no description extraction
@@ -1341,6 +1360,7 @@ class A16ZScraper(BaseScraper):
                 required_skills=required_skills,  # ONLY from cached data (tags, categories, departments)
                 full_description=description,  # May be "Parsing Error" but other fields still enriched
                 employee_count=employee_count, # New field
+                published_at=published_at, # New field
                 raw_html_url=raw_html_url,  # URL to HTML in Azure Blob Storage
             )
             

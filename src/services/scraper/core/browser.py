@@ -49,16 +49,37 @@ class BrowserManager:
         """Start the Playwright browser instance."""
         if self._playwright is None:
             self._playwright = await async_playwright().start()
-            self._browser = await self._playwright.chromium.launch(headless=self.headless)
+            self._browser = await self._playwright.chromium.launch(
+                headless=self.headless,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-infobars",
+                    "--window-position=0,0",
+                    "--ignore-certifcate-errors",
+                    "--ignore-certifcate-errors-spki-list",
+                ]
+            )
             
             # Create context with standard Chrome on Windows User-Agent
             self._context = await self._browser.new_context(
                 user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
                     "Chrome/120.0.0.0 Safari/537.36"
-                )
+                ),
+                viewport={"width": 1920, "height": 1080},
+                locale="en-US",
+                timezone_id="America/New_York",
             )
+            
+            # Add init script to mask webdriver
+            await self._context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+            """)
 
     async def close(self) -> None:
         """Close the browser and cleanup resources."""
@@ -173,7 +194,7 @@ class BrowserManager:
                 # Add random delay (1-2 seconds) AFTER selector is found for JavaScript hydration
                 # This ensures any remaining JavaScript has time to render dynamic text
                 if selector_found:
-                    hydration_delay = random.uniform(1.0, 2.0)
+                    hydration_delay = random.uniform(0.5, 1.0)
                     await asyncio.sleep(hydration_delay)
                     logger.debug(
                         f"Completed JavaScript hydration delay: {hydration_delay:.2f}s "

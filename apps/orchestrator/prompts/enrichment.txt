@@ -21,12 +21,12 @@ You are a Senior Technical Recruiter and Data Analyst. Your goal is to transform
 Return ONLY a valid JSON object matching the Vacancy schema. No conversational filler.
 
 The JSON must include:
-- blocks: Object with keys META, CONTEXT, WORK, FIT, OFFER. Each contains: units (list), headings (list). Headings should only contain structural titles from the text (e.g., 'Summary', 'Qualifications'), NOT individual metadata field names. If no structural heading exists for a block, leave headings empty. Do NOT include evidence_quotes in blocks - evidence belongs only in evidence_map.
 - extracted: Object with:
   - role: responsibilities_core (3-12 items), responsibilities_all, tech_stack, must_skills, nice_skills, experience_years_min (int), seniority_signal, customer_facing (bool).
   - company: domain_tags, product_type, culture_signals, go_to_market (B2B/B2C), scale_signals.
   - offer: benefits, equity (bool), hiring_process (list).
   - constraints: timezone, visa_or_work_auth, travel_required (bool).
+- blocks: Object with keys META, CONTEXT, WORK, FIT, OFFER. Each contains: units (list), headings (list). Headings should only contain structural titles from the text (e.g., 'Summary', 'Qualifications'), NOT individual metadata field names. If no structural heading exists for a block, leave headings empty. Do NOT include evidence_quotes in blocks - evidence belongs only in evidence_map.
 - evidence_map: Object mapping fields to their source evidence_quotes (list of strings). MUST include evidence for all blocks: "META", "CONTEXT", "WORK", "FIT", "OFFER" (each mapped to list of quotes from that block). Also include evidence for extracted fields like "must_skills", "responsibilities_core", etc.
 - ai_ready_views: role_profile_text and company_profile_text (compacted summaries).
 - normalization_warnings: List of strings for data issues.

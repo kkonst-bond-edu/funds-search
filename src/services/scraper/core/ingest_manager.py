@@ -489,6 +489,22 @@ class IngestManager:
         # For any other type, convert to string
         return str(product_type).strip() if str(product_type).strip() else None
 
+    def _safe_int(self, value: Any) -> Optional[int]:
+        """Safely convert value to int."""
+        if value is None:
+            return None
+        if isinstance(value, int):
+            return value
+        try:
+            # Handle strings like "5+" or "5 years" by taking the first digit sequence
+            if isinstance(value, str):
+                match = re.search(r'\d+', value)
+                if match:
+                    return int(match.group())
+            return int(value)
+        except (ValueError, TypeError):
+            return None
+
     def _is_scraper_noise(self, text: str) -> bool:
         """
         Check if a text unit is scraper noise that should be filtered out.
@@ -1001,9 +1017,9 @@ class IngestManager:
                                 tech_stack=role_data.get("tech_stack", []),
                                 must_skills=role_data.get("must_skills", []),
                                 nice_skills=role_data.get("nice_skills", []),
-                                experience_years_min=role_data.get("experience_years_min"),
+                                experience_years_min=self._safe_int(role_data.get("experience_years_min")),
                                 seniority_signal=role_data.get("seniority_signal"),
-                                customer_facing=role_data.get("customer_facing", False)
+                                customer_facing=role_data.get("customer_facing") or False
                             ),
                             company=CompanyExtracted(
                                 domain_tags=company_data.get("domain_tags", []),
@@ -1015,13 +1031,13 @@ class IngestManager:
                             ),
                             offer=OfferExtracted(
                                 benefits=offer_data.get("benefits", []),
-                                equity=offer_data.get("equity", False),
+                                equity=offer_data.get("equity") or False,
                                 hiring_process=offer_data.get("hiring_process", [])
                             ),
                             constraints=ConstraintsExtracted(
                                 timezone=constraints_data.get("timezone"),
                                 visa_or_work_auth=constraints_data.get("visa_or_work_auth"),
-                                travel_required=constraints_data.get("travel_required", False)
+                                travel_required=constraints_data.get("travel_required") or False
                             )
                         )
                     
@@ -1158,6 +1174,9 @@ class IngestManager:
             
             if vacancy.employee_count:
                 metadata["employee_count"] = vacancy.employee_count
+            
+            if vacancy.published_at:
+                metadata["published_at"] = vacancy.published_at.isoformat()
             
             # Add enriched fields (stringified for Pinecone metadata size limits)
             # These fields are stored as JSON strings to stay within Pinecone metadata size limits

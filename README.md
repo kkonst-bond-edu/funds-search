@@ -82,6 +82,7 @@ graph TD
             JS[<b>Job Scout</b><br/><i>The Intent Extractor</i><br/>DeepSeek R1]:::agent
             MM[<b>Matchmaker</b><br/><i>The Analytical RAG</i><br/>Claude/GPT-4o]:::agent
             HA[<b>Hunter Agent</b><br/><i>Real-time Scraper</i><br/>Firecrawl Service]:::agent
+            VA[<b>Vacancy Analyst</b><br/><i>The Enricher</i><br/>DeepSeek V3]:::agent
         end
 
         %% Internal Services
@@ -113,10 +114,32 @@ graph TD
 
     HUB -->|4. No Data?| HA
     HA -->|Live Crawl| EXT
+    HA -->|Raw HTML| VA
+    VA -->|Enriched JSON| EMB
+    EMB -->|Vectors + Metadata| PC
 
     %% Feedback loop
     MM -->|Final Response| UI
 ```
+
+### 🧩 Parsing & Enrichment Pipeline
+
+Before any vacancy reaches the vector database, it undergoes a rigorous enrichment process by the **Vacancy Analyst** agent. This ensures that vague job descriptions are converted into structured, queryable data.
+
+#### 1. Classification (Taxonomy)
+The agent maps raw text to standardized taxonomies to enable precise filtering:
+*   **Category**: Mapped to standard functions (e.g., `Engineering`, `Product`, `G&A`).
+*   **Seniority**: Infers level from context (e.g., `Junior`, `Senior`, `Lead`, `C-Level`).
+*   **Remote Policy**: Differentiates between `Remote`, `Hybrid`, and `On-site` based on subtle cues.
+
+#### 2. Deep Enrichment (Extraction)
+The agent extracts structured entities using an **"Evidence Map"** (quoting the source text) to ensure accuracy:
+*   **Role Details**: Tech stack (e.g., `Python`, `Kubernetes`), required skills, and "nice-to-haves".
+*   **Company Signals**: Domain tags (e.g., `Fintech`, `Generative AI`), product type (`SaaS`, `Marketplace`), and culture signals.
+*   **Offer & Constraints**: Extracts salary ranges, equity options (`options`, `RSUs`), visa sponsorship availability, and timezone constraints.
+
+#### 3. Storage
+This structured metadata is stored alongside the vector embeddings in **Pinecone**. This allows the **Job Scout** to perform hybrid searches, combining semantic understanding ("find me a challenging role") with hard filters ("Must have Visa Support" and "Equity").
 
 ---
 
@@ -130,6 +153,7 @@ We avoid a single "all-knowing bot". Each agent is specialized, easier to debug,
 | **Job Scout 🛰️** | Intent Extractor | **DeepSeek R1** | Interprets vague chat messages ("like Google but in crypto") into structured filters and vector search queries. |
 | **Matchmaker 🤝** | Analyst (RAG) | **GPT-4o / Claude** | Reads candidate profiles vs. vacancies line-by-line. Assigns a relevance score and writes a "Why this fits" explanation. |
 | **Hunter Agent 🏹** | Scraper | **Firecrawl** | Wakes up if the local DB is empty or stale. Crawls external boards (e.g., Vacancies Boards) to fetch fresh data. |
+| **Vacancy Analyst 🧠** | Enrichment Specialist | **DeepSeek V3** | Classifies raw job post text into standardized taxonomies (Category, Seniority) and extracts structured entities (Benefits, Tech Stack, Culture) before indexing. |
 
 ### Agent Workflow
 

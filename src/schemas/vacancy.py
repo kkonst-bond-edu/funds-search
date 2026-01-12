@@ -217,6 +217,7 @@ class Vacancy(BaseModel):
     description_url: str = Field(..., description="URL to full job description")
     required_skills: List[str] = Field(default_factory=list, description="Required skills list")
     employee_count: Optional[str] = Field(None, description="Company employee count")
+    published_at: Optional[datetime] = Field(None, description="Date when the vacancy was published")
     full_description: str = Field(..., description="Full job description for vector search")
     raw_html_url: Optional[str] = Field(None, description="URL to raw HTML file in Azure Blob Storage")
     

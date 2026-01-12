@@ -7,7 +7,8 @@ deep enrichment (segmentation, entity extraction, summarization) of job vacancie
 
 import json
 import logging
-from typing import Dict, Any
+import re
+from typing import Dict, Any, Optional
 import structlog
 from langchain_core.messages import HumanMessage
 
@@ -64,7 +65,6 @@ class VacancyAnalyst(BaseAgent):
         # Remove markdown code blocks (```json ... ``` or ``` ... ```)
         if "```" in cleaned:
             # Try to extract JSON from code blocks
-            import re
             # Match ```json ... ``` or ``` ... ```
             json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', cleaned, re.DOTALL)
             if json_match:
@@ -78,12 +78,80 @@ class VacancyAnalyst(BaseAgent):
         
         # Try to find JSON object if there's extra text around it
         if not cleaned.startswith("{"):
-            import re
             json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
             if json_match:
                 cleaned = json_match.group(0)
         
         return cleaned
+
+    def _try_fix_json(self, json_str: str) -> str:
+        """
+        Attempt to fix common JSON truncation errors (unterminated strings, missing brackets).
+        
+        Args:
+            json_str: Malformed JSON string
+            
+        Returns:
+            Ideally repaired JSON string
+        """
+        if not json_str:
+            return "{}"
+
+        # 1. Check for unterminated string (odd number of unescaped quotes)
+        # We walk backwards to find the last quote and check if it's closing or opening
+        # A simple heuristic: if the string ends in middle of content, we likely have an open quote
+        # But scanning is safer.
+        
+        escaped = False
+        in_string = False
+        quote_count = 0
+        
+        for char in json_str:
+            if char == '"' and not escaped:
+                in_string = not in_string
+                quote_count += 1
+            
+            if char == '\\':
+                escaped = not escaped
+            else:
+                escaped = False
+        
+        # If in_string is true, we have an unterminated string at the end
+        if in_string:
+            # Check if it looks like a value or key
+            # Close it
+            json_str += '"'
+        
+        # 2. Balance braces and brackets
+        brace_stack = [] # for { and [
+        
+        # Re-scan for structural characters outside strings
+        escaped = False
+        in_string = False
+        
+        for char in json_str:
+            if char == '"' and not escaped:
+                in_string = not in_string
+            
+            if char == '\\':
+                escaped = not escaped
+            else:
+                escaped = False
+                
+            if not in_string:
+                if char == '{':
+                    brace_stack.append('}')
+                elif char == '[':
+                    brace_stack.append(']')
+                elif char == '}' or char == ']':
+                    if brace_stack and brace_stack[-1] == char:
+                        brace_stack.pop()
+        
+        # Append missing closing characters in reverse order
+        while brace_stack:
+            json_str += brace_stack.pop()
+            
+        return json_str
 
     async def classify(self, title: str, description: str) -> Dict[str, Any]:
         """
@@ -255,10 +323,62 @@ class VacancyAnalyst(BaseAgent):
             # Clean the JSON response (remove markdown code blocks if present)
             cleaned_response = self._clean_json_response(response_text)
             
+            enrichment_result = None
+            parsing_error = None
+            
             # Parse JSON
             try:
                 enrichment_result = json.loads(cleaned_response)
-                
+            except json.JSONDecodeError as e:
+                parsing_error = e
+                # Attempt to repair JSON
+                try:
+                    repaired_json = self._try_fix_json(cleaned_response)
+                    enrichment_result = json.loads(repaired_json)
+                    logger.warning("Successfully repaired truncated JSON response")
+                    
+                    if enrichment_result.get("normalization_warnings") is None:
+                         enrichment_result["normalization_warnings"] = []
+                    enrichment_result["normalization_warnings"].append("JSON_REPAIRED_FROM_TRUNCATION")
+                    
+                    # Log what we managed to salvage
+                    logger.warning(
+                        "Repair stats",
+                        has_extracted=enrichment_result.get("extracted") is not None,
+                        has_blocks=enrichment_result.get("blocks") is not None
+                    )
+                except Exception as repair_error:
+                    # Log detailed error information for debugging
+                    error_position = getattr(e, 'pos', None)
+                    logger.error(
+                        "enrichment_json_parse_error",
+                        error=str(e),
+                        repair_error=str(repair_error),
+                        error_position=error_position,
+                        response_length=len(response_text),
+                        # Log partial content to help debug without flooding everything
+                        response_start=response_text[:200],
+                        response_end=response_text[-200:] if len(response_text) > 200 else "",
+                    )
+                    
+                    # Try to extract partial JSON components if possible
+                    # This is a last resort to get *some* data
+                    enrichment_result = {}
+                    
+                    # Look for blocks: "blocks": { ... }
+                    # We look for the start of blocks and try to match the closing brace if possible
+                    # Or just skip it if we can't find a valid object
+                    try:
+                        blocks_match = re.search(r'"blocks"\s*:\s*(\{)', cleaned_response)
+                        if blocks_match:
+                            # It's hard to extract just the object with regex without recursion
+                            # But we can try to extract extracted entities if they appear earlier
+                            pass
+                    except Exception:
+                        pass
+                        
+            
+            if enrichment_result:
                 # Validate structure and ensure all required fields exist with defaults
                 result = {
                     "blocks": enrichment_result.get("blocks"),
@@ -284,48 +404,16 @@ class VacancyAnalyst(BaseAgent):
                 )
                 
                 return result
-                
-            except json.JSONDecodeError as e:
-                # Log detailed error information for debugging
-                error_position = getattr(e, 'pos', None)
-                error_line = getattr(e, 'lineno', None)
-                error_col = getattr(e, 'colno', None)
-                
-                logger.error(
-                    "enrichment_json_parse_error",
-                    error=str(e),
-                    error_position=error_position,
-                    error_line=error_line,
-                    error_col=error_col,
-                    response_length=len(response_text),
-                    cleaned_length=len(cleaned_response),
-                    response_preview=response_text[:500],  # First 500 chars
-                    cleaned_preview=cleaned_response[:500],  # First 500 chars of cleaned
-                    response_suffix=response_text[-500:] if len(response_text) > 500 else "",  # Last 500 chars
-                )
-                
-                # Try to extract partial JSON if possible
-                try:
-                    # Try to find and extract just the blocks or extracted part
-                    import re
-                    # Look for blocks: {...}
-                    blocks_match = re.search(r'"blocks"\s*:\s*(\{[^}]*\})', cleaned_response, re.DOTALL)
-                    extracted_match = re.search(r'"extracted"\s*:\s*(\{[^}]*\})', cleaned_response, re.DOTALL)
-                    
-                    if blocks_match or extracted_match:
-                        logger.warning("Found partial JSON structure, but full parse failed")
-                except Exception:
-                    pass
-                
-                # Return empty structure on JSON parsing failure
+            else:
+                # Return empty structure on failure
                 return {
                     "blocks": None,
                     "extracted": None,
                     "evidence_map": {},
                     "ai_ready_views": None,
                     "normalization_warnings": [
-                        f"Failed to parse enrichment JSON from LLM: {str(e)}"
-                        + (f" (position {error_position})" if error_position else "")
+                        f"Failed to parse enrichment JSON from LLM: {str(parsing_error)}"
+                        + (f" (position {getattr(parsing_error, 'pos', '?')})" if parsing_error else "")
                     ],
                 }
                 

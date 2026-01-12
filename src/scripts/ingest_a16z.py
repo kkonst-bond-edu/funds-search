@@ -9,6 +9,10 @@ import asyncio
 import re
 from pathlib import Path
 from typing import List, Dict, Any
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Add project root to path for imports
 project_root = Path(__file__).parent.parent.parent

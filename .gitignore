@@ -60,3 +60,7 @@ temp_*.pdf
 storage/raw_scrapes/
 !storage/raw_scrapes/.gitkeep
 !storage/.gitkeep
+
+# Data dumps
+vacancies_dump.json
+data/vacancies_dump.json

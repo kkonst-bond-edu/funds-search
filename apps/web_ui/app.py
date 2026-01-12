@@ -174,6 +174,36 @@ st.markdown(
         text-decoration: underline;
         color: #2563eb;
     }
+    .tag-category {
+        margin-bottom: 12px;
+    }
+    .tag-category-label {
+        font-size: 11px;
+        color: #6b7280;
+        font-weight: 600;
+        text-transform: uppercase;
+        margin-bottom: 6px;
+        letter-spacing: 0.05em;
+    }
+    .profile-section {
+        margin-bottom: 12px;
+        background-color: #f9fafb;
+        padding: 12px;
+        border-radius: 6px;
+        border-left: 3px solid #e5e7eb;
+    }
+    .profile-label {
+        font-size: 11px;
+        color: #6b7280;
+        font-weight: 700;
+        margin-bottom: 4px;
+        text-transform: uppercase;
+    }
+    .profile-text {
+        font-size: 14px;
+        color: #374151;
+        line-height: 1.5;
+    }
     </style>
 """,
     unsafe_allow_html=True,
@@ -689,23 +719,30 @@ def display_vacancy_card(vacancy: dict, index: int):
                 else:
                     salary_range = None
 
-    # Profile Summary
-    profile_summary = get_nested(vacancy, "ai_ready_views.role_profile_text")
+    # Profiles
+    role_profile = get_nested(vacancy, "ai_ready_views.role_profile_text")
+    company_profile = get_nested(vacancy, "ai_ready_views.company_profile_text")
     
-    # Tech Stack
+    # Tag Groups
+    # 1. Tech Stack
     tech_stack = get_nested(vacancy, "extracted.role.tech_stack", [])
     if tech_stack:
         tech_stack = [t for t in tech_stack if t.lower() not in ["maintenance", "other", "n/a"]]
-
-    # Extended Fields
-    go_to_market = get_nested(vacancy, "extracted.company.go_to_market")
-    product_type = get_nested(vacancy, "extracted.company.product_type")
+        
+    # 2. Must Skills
+    must_skills = get_nested(vacancy, "extracted.role.must_skills", [])
     
-    # Signals
+    # 3. Required Skills
+    required_skills = vacancy.get("required_skills", [])
+    
+    # 4. Domain Tags
+    domain_tags = get_nested(vacancy, "extracted.company.domain_tags", [])
+    
+    # Signals (excluding culture_signals as requested)
     has_equity = get_nested(vacancy, "extracted.offer.equity", False)
     is_customer_facing = get_nested(vacancy, "extracted.role.customer_facing", False)
-    culture_signals = get_nested(vacancy, "extracted.company.culture_signals", [])
-
+    product_type = get_nested(vacancy, "extracted.company.product_type")
+    
     description_url = vacancy.get("description_url", "")
     
     # Scores
@@ -728,12 +765,6 @@ def display_vacancy_card(vacancy: dict, index: int):
         color = "#22c55e" if current_score >= 80 else "#eab308" if current_score >= 50 else "#ef4444"
         score_html = f'<div style="text-align: right;"><div style="font-size: 24px; font-weight: 700; color: {color};">{int(current_score)}%</div><div style="font-size: 11px; color: #666;">Match</div></div>'
     
-    # Tags HTML
-    tags_html = ""
-    if tech_stack:
-        for tag in tech_stack[:8]: # Limit to 8 tags
-            tags_html += f'<span class="tech-tag">{tag}</span>'
-    
     # Signals HTML
     signals_list = []
     if has_equity:
@@ -742,12 +773,7 @@ def display_vacancy_card(vacancy: dict, index: int):
         signals_list.append('<span class="signal-tag">👤 Customer Facing</span>')
     if product_type:
         signals_list.append(f'<span class="signal-tag">🚀 {product_type}</span>')
-    if culture_signals:
-        for cs in culture_signals[:3]:
-             signals_list.append(f'<span class="signal-tag" style="background-color: #f0fdf4; color: #166534;">{cs}</span>')
     
-    signals_html = "".join(signals_list)
-
     # Meta Items
     meta_html = ""
     
@@ -777,21 +803,75 @@ def display_vacancy_card(vacancy: dict, index: int):
     row2_html = " • ".join(row2_items)
 
     # Build conditional HTML sections
-    sections_html = ""
-    if tags_html:
-        sections_html += f'<div class="tags-row">{tags_html}</div>'
-    if profile_summary:
-        sections_html += f'<div class="summary-text">{profile_summary}</div>'
-    if signals_html:
-        sections_html += f'<div style="margin-bottom: 16px;">{signals_html}</div>'
     
+    # Build specific sections
+    role_profile_html = ""
+    if role_profile:
+        role_profile_html = f'''<div class="profile-section">
+    <div class="profile-label">Role Profile</div>
+    <div class="profile-text">{role_profile}</div>
+</div>'''
+
+    company_profile_html = ""
+    if company_profile:
+        company_profile_html = f'''<div class="profile-section">
+    <div class="profile-label">Company Profile</div>
+    <div class="profile-text">{company_profile}</div>
+</div>'''
+    
+    # Helper to build tag block
+    def build_tag_block(title, tags, css_class="tech-tag"):
+        if not tags: return ""
+        # Limit tags to reasonable amount
+        display_tags = tags[:10]
+        tags_str = "".join([f'<span class="{css_class}">{t}</span>' for t in display_tags])
+        return f'''<div class="tag-category">
+    <div class="tag-category-label">{title}</div>
+    <div class="tags-row">{tags_str}</div>
+</div>'''
+
+    # Gather existing skills to prevent duplicates in General Required Skills
+    existing_skills_lower = set()
+    if tech_stack:
+        existing_skills_lower.update(t.lower() for t in tech_stack)
+    if must_skills:
+        existing_skills_lower.update(t.lower() for t in must_skills)
+
+    # Key Signals
+    signals_html = ""
+    if signals_list:
+        signals_str = "".join(signals_list)
+        signals_html = f'''<div class="tag-category">
+    <div class="tag-category-label">Key Signals</div>
+    <div class="tags-row">{signals_str}</div>
+</div>'''
+
+    # Block 1: Skills (after Role Profile)
+    block1_html = ""
+    if tech_stack:
+        block1_html += build_tag_block("Tech Stack", tech_stack)
+    if must_skills:
+        block1_html += build_tag_block("Must Have Skills", must_skills)
+    
+    # Filter required skills
+    if required_skills:
+        filtered_required = [s for s in required_skills if s.lower() not in existing_skills_lower]
+        block1_html += build_tag_block("Required Skills (General)", filtered_required)
+
+    # Block 2: Domain (after Company Profile)
+    block2_html = ""
+    if domain_tags:
+        block2_html += build_tag_block("Domain & Industry", domain_tags)
+
     # Conditional wrappers for meta sections
     meta_section = f'<div class="salary-loc-row">{meta_html}</div>' if meta_html else ""
     secondary_meta_section = f'<div class="secondary-meta">{row2_html}</div>' if row2_html else ""
 
-    # Build card HTML as a single line to avoid Markdown parsing issues with newlines
+    # Build card HTML
     html_parts = []
     html_parts.append('<div class="vacancy-card">')
+    
+    # Header
     html_parts.append('<div style="display: flex; justify-content: space-between; align-items: flex-start;">')
     html_parts.append('<div style="flex-grow: 1;">')
     html_parts.append(f'<div class="company-name">{company_name}</div>')
@@ -801,10 +881,24 @@ def display_vacancy_card(vacancy: dict, index: int):
     html_parts.append('</div>') # Close Left Column
     html_parts.append(score_html)
     html_parts.append('</div>') # Close Header Flex Row
-    html_parts.append(sections_html)
+    
+    # Body in new order:
+    # 1. Key Signals
+    html_parts.append(signals_html)
+    # 2. Role Profile
+    html_parts.append(role_profile_html)
+    # 3. Block 1 (Skills)
+    html_parts.append(block1_html)
+    # 4. Company Profile
+    html_parts.append(company_profile_html)
+    # 5. Block 2 (Domain)
+    html_parts.append(block2_html)
+    
+    # Footer (Apply Button)
     html_parts.append('<div style="margin-top: 12px; display: flex; justify-content: flex-end;">')
     html_parts.append(f'<a href="{description_url}" target="_blank" class="apply-btn"><span>→</span> Apply</a>')
     html_parts.append('</div>')
+    
     html_parts.append('</div>') # Close vacancy-card
     
     card_html = "".join(html_parts)
