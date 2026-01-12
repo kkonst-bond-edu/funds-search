@@ -5,6 +5,34 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+
+def get_api_text(data: Any) -> str:
+    """
+    Extract text from API data that can be in various formats (string, dict, list).
+    
+    Args:
+        data: API data in any format (string, dict, list, etc.)
+        
+    Returns:
+        Extracted text string, or empty string if data is empty/None
+    """
+    if not data:
+        return ""
+    if isinstance(data, str):
+        return data.strip()
+    if isinstance(data, dict):
+        for key in ["name", "label", "text", "display_name", "value"]:
+            if data.get(key):
+                return str(data[key]).strip()
+    if isinstance(data, list):
+        values = []
+        for item in data:
+            text = get_api_text(item)
+            if text:
+                values.append(text)
+        return ", ".join(values)
+    return str(data).strip()
+
 class FilterConfig(BaseModel):
     """Configuration for flexible vacancy download control"""
     
@@ -40,12 +68,50 @@ class VacancyFilterService:
         
         # --- 1. Remote Filter ---
         if self.config.remote_only:
+            # Check is_remote flag from API
             is_remote_flag = metadata.get("is_remote", False)
-            location_str = str(metadata.get("location", "")).lower()
             
-            # Pass if flag is set OR "remote" word is in location
-            if not (is_remote_flag or "remote" in location_str):
-                logger.debug(f"Filter [Remote]: Skipped '{title}' at '{company}' (Location: {metadata.get('location')})")
+            # Extract location text properly (handles dict, list, string formats)
+            location_raw = metadata.get("location", "")
+            location_str = get_api_text(location_raw).lower()
+            
+            # Also check location_string and office fields as fallback
+            location_string_raw = metadata.get("location_string", "")
+            location_string_str = get_api_text(location_string_raw).lower()
+            office_raw = metadata.get("office", "")
+            office_str = get_api_text(office_raw).lower()
+            
+            # Combine all location-related fields for checking
+            all_location_text = f"{location_str} {location_string_str} {office_str}".lower()
+            
+            # Remote keywords to check for
+            remote_keywords = [
+                "remote",
+                "anywhere",
+                "wfh",
+                "work from home",
+                "work from anywhere",
+                "distributed",
+                "work remotely",
+                "remote work",
+                "remote position",
+                "remote job",
+                "fully remote",
+                "100% remote"
+            ]
+            
+            # Check if any remote keyword is found in location fields
+            has_remote_keyword = any(keyword in all_location_text for keyword in remote_keywords)
+            
+            # Also check title for remote keywords (some jobs mention remote in title)
+            has_remote_in_title = any(keyword in title for keyword in remote_keywords)
+            
+            # Pass if flag is set OR remote keyword found in location/title
+            if not (is_remote_flag or has_remote_keyword or has_remote_in_title):
+                logger.debug(
+                    f"Filter [Remote]: Skipped '{metadata.get('title', 'Unknown')}' at '{company}' "
+                    f"(is_remote={is_remote_flag}, location='{location_str}', location_string='{location_string_str}', office='{office_str}')"
+                )
                 return False
 
         # --- 2. Location Filter (Include/Exclude) ---

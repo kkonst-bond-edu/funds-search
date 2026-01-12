@@ -904,30 +904,51 @@ class A16ZScraper(BaseScraper):
                         location = location_elem.get_text(strip=True)
             
             # ========== DETERMINE REMOTE OPTION ==========
-            # Priority 1: Explicitly check if location contains "Hybrid" (case-insensitive)
+            # Priority 1: Use cached is_remote from API (most reliable)
             remote_option = None
-            location_lower = (location or "").lower()
-            if "hybrid" in location_lower:
-                remote_option = True
-                logger.debug(f"Set remote_option=True because location contains 'Hybrid': {location}")
+            cached_is_remote = cached.get("is_remote")
+            if cached_is_remote is not None:
+                remote_option = bool(cached_is_remote)
+                logger.debug(f"Set remote_option={remote_option} from cached is_remote flag")
             
-            # Priority 2: Use cached is_remote from API (most reliable)
+            # Priority 2: Text-based detection from location and description
             if remote_option is None:
-                cached_is_remote = cached.get("is_remote")
-                if cached_is_remote is not None:
-                    remote_option = bool(cached_is_remote)
-            
-            # Priority 3: Fallback to text-based detection if cached data not available
-            if remote_option is None:
-                remote_option = False
+                location_lower = (location or "").lower()
                 description_lower = description.lower() if description != "Parsing Error" else ""
-                if (
-                    "remote" in location_lower
-                    or "remote" in description_lower
-                    or "anywhere" in location_lower
-                    or "work from home" in description_lower
-                ):
+                
+                # Remote keywords to check for (same as in filter_service.py)
+                remote_keywords = [
+                    "remote",
+                    "anywhere",
+                    "wfh",
+                    "work from home",
+                    "work from anywhere",
+                    "distributed",
+                    "work remotely",
+                    "remote work",
+                    "remote position",
+                    "remote job",
+                    "fully remote",
+                    "100% remote"
+                ]
+                
+                # Check location and description for remote keywords
+                all_text = f"{location_lower} {description_lower}"
+                has_remote_keyword = any(keyword in all_text for keyword in remote_keywords)
+                
+                # Hybrid is NOT considered fully remote (it's partial remote)
+                has_hybrid = "hybrid" in location_lower or "hybrid" in description_lower
+                
+                if has_remote_keyword and not has_hybrid:
                     remote_option = True
+                    logger.debug(f"Set remote_option=True based on remote keywords in location/description")
+                elif has_hybrid:
+                    # Hybrid is explicitly NOT remote (it's partial remote)
+                    remote_option = False
+                    logger.debug(f"Set remote_option=False because location/description contains 'Hybrid' (not fully remote)")
+                else:
+                    remote_option = False
+                    logger.debug(f"Set remote_option=False (no remote keywords found)")
             
             # Ensure it's always a boolean
             remote_option = bool(remote_option)

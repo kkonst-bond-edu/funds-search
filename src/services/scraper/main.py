@@ -70,20 +70,41 @@ async def process_vacancy(
         try:
             logger.info(f"Processing: {link}")
             
-            # Fetch details
-            raw_html = await a16z_scraper.fetch_job_details(link)
-            if not raw_html:
-                logger.warning(f"Failed to fetch HTML for {link}")
+            # Extract vacancy details using the correct method
+            vacancy = await a16z_scraper.extract_details(link)
+            if not vacancy:
+                logger.warning(f"Failed to extract vacancy data for {link}")
+                async with lock:
+                    stats["skipped_count"] += 1
                 return
-                
-            # Parse
-            parsed_data = await a16z_scraper.parse_job_page(raw_html, link)
-            if not parsed_data:
-                logger.warning(f"Failed to parse data for {link}")
-                return
-                
+            
+            # Convert Vacancy to dict for JSON serialization
+            if hasattr(vacancy, 'model_dump'):
+                parsed_data = vacancy.model_dump()
+            elif hasattr(vacancy, 'dict'):
+                parsed_data = vacancy.dict()
+            else:
+                # Fallback: convert to dict manually
+                parsed_data = {
+                    "title": vacancy.title,
+                    "company_name": vacancy.company_name,
+                    "location": vacancy.location,
+                    "description_url": vacancy.description_url,
+                    "full_description": vacancy.full_description,
+                    "remote_option": vacancy.remote_option,
+                    "is_hybrid": getattr(vacancy, 'is_hybrid', False),
+                    "category": vacancy.category,
+                    "industry": vacancy.industry,
+                    "required_skills": vacancy.required_skills,
+                    "experience_level": vacancy.experience_level,
+                    "company_stage": vacancy.company_stage.value if hasattr(vacancy.company_stage, 'value') else str(vacancy.company_stage),
+                    "salary_range": vacancy.salary_range,
+                    "employee_count": vacancy.employee_count,
+                    "published_at": vacancy.published_at.isoformat() if vacancy.published_at else None,
+                }
+            
             # Process and Ingest
-            success = await ingest_manager.process_new_vacancy(parsed_data)
+            success = await ingest_manager.process_new_vacancy(vacancy)
             
             if success:
                 # Save to dump file safely with lock
@@ -94,13 +115,15 @@ async def process_vacancy(
                     stats["new_count"] += 1
                     stats["processed_count"] += 1
                     existing_urls.add(link)
-                    logger.info(f"Successfully processed and saved: {parsed_data.get('title', 'Unknown')}")
+                    logger.info(f"Successfully processed and saved: {vacancy.title}")
             else:
                  async with lock:
                     stats["skipped_count"] += 1
                     
         except Exception as e:
-            logger.error(f"Error processing {link}: {str(e)}")
+            logger.error(f"Error processing {link}: {str(e)}", exc_info=True)
+            async with lock:
+                stats["skipped_count"] += 1
 
 
 logger = logging.getLogger(__name__)
@@ -123,7 +146,9 @@ async def main(filter_config: Optional[Dict[str, Any]] = None) -> None:
     # Initialize Filter Service
     config = FilterConfig(**(filter_config or {}))
     filter_service = VacancyFilterService(config)
-    logger.info(f"Initialized FilterService with config: {config.dict()}")
+    # Use model_dump() for Pydantic V2, fallback to dict() for V1
+    config_dict = config.model_dump() if hasattr(config, 'model_dump') else config.dict()
+    logger.info(f"Initialized FilterService with config: {config_dict}")
     
     # Initialize BrowserManager and use as async context manager
     logger.info("Initializing BrowserManager")
