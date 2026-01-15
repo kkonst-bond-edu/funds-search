@@ -11,13 +11,16 @@ The UI is organized into **5 main tabs**, each serving a distinct purpose:
 
 - **Chat Interface**: Natural language interaction with the AI recruiter
 - **Initial Greeting**: Welcoming message inviting the user to describe their ideal role
-- **API Endpoint**: Uses `POST /api/v1/vacancies/chat`
+- **API Endpoint**: Uses `POST /chat/stream` (SSE stream)
 - **Features**:
-  - **Persona Integration**: Automatically uses your uploaded CV profile for context if available
+  - **Persona Integration**: Uses CV persona when available; otherwise builds profile from chat
   - **Incremental Memory**: Remembers preferences (e.g., "remote only") stated in previous messages
-  - **Technical Logs**: Expandable debug section showing the `User Persona` JSON and generated `Search Filters`
-  - **Search Stats**: Displays the number of database matches and filtering results
+  - **Technical Logs**: Expandable debug section with request payload and strategy info
+  - **Search Stats**: Displays the number of database matches and filtering results when available
   - **Vacancy Cards**: Rich, compact display of job matches with AI reasoning
+- **Streaming Status**: Live status updates as the graph moves through nodes
+- **Skip Questions**: When missing info is required, the UI shows questions and a "Skip" action
+- **Matchmaker Scores**: Role vs Candidate and Company vs Candidate scores (0–10) appear inside the profile sections
 
 ### Tab 2: 🔍 Manual Search
 **Filter-based search** - Traditional search with explicit filters.
@@ -47,10 +50,9 @@ The UI is organized into **5 main tabs**, each serving a distinct purpose:
 **System health monitoring** - Comprehensive service diagnostics.
 
 - **Features**:
-  - Full system health check
-  - Service status indicators (API, CV Processor, Embedding Service)
-  - Latency metrics
-  - Error diagnostics
+  - Full system health check via `/api/v1/system/diagnostics` (fallback `/system/diagnostics`)
+  - Service status indicators (API, CV Processor, Embedding Service, Pinecone, LLM)
+  - Latency metrics and error diagnostics
   - Refresh functionality
 
 ### Tab 5: ⚙️ Admin & Scraper Control
@@ -84,7 +86,9 @@ The sidebar is **clean and minimal**, containing only:
 ## Session State Management
 
 - `chat_messages`: Stores chat history for AI Recruiter tab
-- `persona`: Stores the current User Persona (extracted from CV + conversation)
+- `persona`: Stores the CV-derived user persona (if CV was uploaded)
+- `user_profile`: Stores graph-managed user profile derived from chat
+- `skip_request`: Triggers a skip action when user clicks "Skip questions"
 - `interview_complete`: Tracks interview completion status
 - `diagnostics_result`: Stores system diagnostics results
 - `diagnostics_running`: Tracks diagnostics execution state

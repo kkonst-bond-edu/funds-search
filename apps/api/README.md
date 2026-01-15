@@ -4,13 +4,11 @@ FastAPI service for vacancy search, matching, and orchestration functionality.
 
 ## Endpoints
 
-### Vacancy Search
+### POST `/api/v1/vacancies/search`
 
-#### POST `/api/v1/vacancies/search`
+Structured vacancy search against the Pinecone index.
 
-Search for vacancies using structured filter parameters.
-
-**Request Body:**
+**Request Body (VacancyFilter):**
 ```json
 {
   "role": "Software Engineer",
@@ -19,39 +17,81 @@ Search for vacancies using structured filter parameters.
   "is_remote": true,
   "company_stages": ["Seed", "Series A"],
   "industry": "AI",
-  "min_salary": 120000
+  "min_salary": 120000,
+  "category": "Engineering",
+  "experience_level": "Mid"
 }
 ```
 
-**Response:**
+**Query Parameters:**
+- `use_firecrawl` (bool, default: false): Use Firecrawl for live search
+- `use_mock` (bool, default: false): Use mock data for testing
+- `required_keywords` (list, optional): Required keywords that must appear
+
+**Response (VacancySearchResponse):**
 ```json
-[
-  {
-    "title": "Senior Backend Engineer",
-    "company_name": "Example Corp",
-    "company_stage": "Series A",
-    "location": "San Francisco, CA",
-    "industry": "AI",
-    "salary_range": "$150k-$200k",
-    "description_url": "https://example.com/job",
-    "required_skills": ["Python", "FastAPI", "PostgreSQL"],
-    "remote_option": true
-  }
-]
+{
+  "vacancies": [
+    {
+      "title": "Senior Backend Engineer",
+      "company_name": "Example Corp",
+      "company_stage": "Series A",
+      "location": "San Francisco, CA",
+      "industry": "AI",
+      "salary_range": "$150k-$200k",
+      "description_url": "https://example.com/job",
+      "required_skills": ["Python", "FastAPI", "PostgreSQL"],
+      "remote_option": true
+    }
+  ],
+  "total_in_db": 2500,
+  "initial_vector_matches": 50,
+  "total_after_filters": 12
+}
 ```
 
-**Query Parameters:**
-- `use_firecrawl` (bool, default: false): Use Firecrawl for real-time search
-- `use_mock` (bool, default: false): Use mock data for testing
+### POST `/chat/stream`
 
-#### POST `/api/v1/vacancies/chat`
-
-Conversational vacancy search using natural language. Delegates to the **LangGraph Orchestrator** to perform a multi-agent search.
+Streaming conversational search powered by LangGraph. Uses server-sent events (SSE)
+to emit workflow steps and intermediate state updates.
 
 **Request Body:**
 ```json
 {
-  "message": "I want to work as a Python engineer in a series A AI startup",
+  "message": "I want a remote Python role",
+  "history": [
+    {"role": "user", "content": "Hello"},
+    {"role": "assistant", "content": "Hi! How can I help?"}
+  ],
+  "persona": {
+    "technical_skills": ["Python", "Django"]
+  },
+  "user_profile": null,
+  "skip_questions": false
+}
+```
+
+**Streaming Notes:**
+- Emits `on_chain_start/on_chain_end` for nodes: `strategist`, `job_scout`, `matchmaker`, `validator`.
+- Emits `on_tool_start/on_tool_end` for `search_vacancies_tool`.
+- State updates include:
+  - `candidate_pool`: list of vacancies
+  - `match_results`: matchmaker summaries and scores (0–10)
+  - `missing_info`: missing field ids
+  - `missing_questions`: human-friendly questions
+
+**Skip Flow:**
+- Send `skip_questions=true` to bypass clarification and proceed to search.
+
+### POST `/api/v1/vacancies/chat`
+
+Non-streaming conversational search. Updates persona, interprets message, and returns
+vacancies with a summary and debug payload.
+
+**Request Body:**
+```json
+{
+  "message": "I want to work as a Python engineer in a Series A AI startup",
   "persona": {
     "technical_skills": ["Python", "Django"],
     "preferred_company_stages": ["Series A"]
@@ -69,26 +109,35 @@ Conversational vacancy search using natural language. Delegates to the **LangGra
   "vacancies": [...],
   "summary": "I found 3 matching vacancies...",
   "updated_persona": {
-    "technical_skills": ["Python", "Django", "FastAPI"],
-    ...
+    "technical_skills": ["Python", "Django", "FastAPI"]
   },
-  "search_stats": {
-    "total_after_filters": 3,
-    ...
+  "debug_info": {
+    "friendly_reasoning": "...",
+    "user_persona": {...},
+    "search_filters": {...}
   },
-  "debug_info": { ... }
+  "persona_applied": false
 }
 ```
 
-**How it works:**
-1. **Talent Strategist**: Updates the `persona` based on the `message` and `history`.
-2. **Job Scout**: Generates a hybrid search query (Semantic + Metadata Filters) from the updated persona.
-3. **Orchestrator**: Executes the search in Pinecone.
-4. **Response**: Returns vacancies, summary, and the updated persona (for the frontend to persist).
+### POST `/search`
 
-#### POST `/match`
+Legacy search endpoint (simple query-based matching).
 
-Run the matching orchestrator for a candidate-vacancy match request. Used when a candidate ID is known.
+**Request Body:**
+```json
+{
+  "query": "remote python backend",
+  "location": "London",
+  "role": "Backend Engineer",
+  "remote": true,
+  "user_id": "user_123"
+}
+```
+
+### POST `/match`
+
+Candidate-to-vacancy matching using a processed CV.
 
 **Request Body:**
 ```json
@@ -98,24 +147,27 @@ Run the matching orchestrator for a candidate-vacancy match request. Used when a
 }
 ```
 
-**Response:**
-List of `VacancyMatchResult` objects with scores and reasoning.
+**Response:** List of `VacancyMatchResult` objects with scores and reasoning.
 
-#### GET `/api/v1/vacancies/health`
+### Diagnostics & Health
 
-Health check endpoint for the vacancy search service.
+- `GET /api/v1/system/diagnostics` (also `/system/diagnostics` fallback)
+- `GET /health` and `GET /api/v1/health`
+- `GET /api/v1/vacancies/health`
 
 ## Environment Variables
 
-- `DEEPSEEK_API_KEY`: Required for chat search functionality
 - `PINECONE_API_KEY`: Required for vector search
-- `EMBEDDING_SERVICE_URL`: URL of the embedding service (default: `http://embedding-service:8001`)
-- `CV_PROCESSOR_URL`: URL of the CV processor service (default: `http://cv-processor:8001`)
+- `PINECONE_INDEX_NAME`: Pinecone index name (default: `funds-search`)
+- `EMBEDDING_SERVICE_URL`: Embedding service URL (default: `http://embedding-service:8001`)
+- `CV_PROCESSOR_URL`: CV processor URL (default: `http://cv-processor:8001`)
+- `ACTIVE_AGENT`: LLM provider selector (e.g., `deepseek`, `openai`, `anthropic`)
+- Provider keys as needed: `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
 
 ## Architecture
 
-The API service acts as a gateway to the **Orchestrator**. It doesn't contain heavy business logic itself but routes requests to the appropriate LangGraph workflows.
+The API service acts as a gateway to the **Orchestrator** and vacancy search system.
 
-- **FastAPI**: Handles HTTP requests and validation.
-- **LangGraph**: Manages state and agent execution.
-- **Agents**: Talent Strategist, Job Scout, Matchmaker.
+- **FastAPI**: Handles HTTP requests and validation
+- **LangGraph**: Manages stateful agent execution for `/chat/stream`
+- **Agents**: Talent Strategist, Job Scout, Matchmaker

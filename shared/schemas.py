@@ -88,6 +88,22 @@ class UserPersona(BaseModel):
     user_id: Optional[str] = Field(None, description="User ID associated with this persona")
     
     # Structured preferences that map to database filters
+    target_roles: List[str] = Field(
+        default_factory=list,
+        description="Preferred role titles (e.g., ['Visual Designer', 'Backend Engineer'])"
+    )
+    preferred_categories: List[str] = Field(
+        default_factory=list,
+        description="Preferred job categories (e.g., ['Design', 'Engineering'])"
+    )
+    preferred_experience_levels: List[str] = Field(
+        default_factory=list,
+        description="Preferred experience levels (e.g., ['Junior', 'Mid'])"
+    )
+    preferred_industries: List[str] = Field(
+        default_factory=list,
+        description="Preferred industries (e.g., ['Bio + Health', 'Fintech'])"
+    )
     preferred_company_stages: List[str] = Field(
         default_factory=list, 
         description="Preferred company funding stages (e.g., ['Seed', 'Series A', 'Growth', 'Public'])"

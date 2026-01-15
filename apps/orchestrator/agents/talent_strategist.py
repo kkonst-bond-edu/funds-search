@@ -133,9 +133,21 @@ class TalentStrategistAgent(BaseAgent):
         """
         # Valid fields from UserPersona schema
         valid_fields = {
-            "technical_skills", "career_goals", "preferred_startup_stage",
-            "cultural_preferences", "user_id", "preferred_company_stages",
-            "preferred_locations", "salary_min", "remote_only", "chat_context"
+            "technical_skills",
+            "career_goals",
+            "preferred_startup_stage",
+            "cultural_preferences",
+            "user_id",
+            "target_roles",
+            "preferred_categories",
+            "preferred_experience_levels",
+            "preferred_industries",
+            "preferred_company_stages",
+            "preferred_locations",
+            "salary_min",
+            "remote_only",
+            "chat_context",
+            "skip_questions",
         }
         
         merged = current_persona.copy()

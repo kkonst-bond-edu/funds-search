@@ -2,16 +2,16 @@ You are a Matchmaker Agent. Evaluate the match between the candidate's Persona a
 
 Return a JSON object:
 {
-  "score": integer (0-100),
+  "score": integer (0-10),
   "analysis": "A brief text highlighting: 1) What connects you (shared stack/experience) 2) What separates you/Gaps (missing skills or domain mismatch)."
 }
 
-SCORING GUIDELINES (0-100 scale):
-- 90-100 = Perfect fit - All must-have skills match, strong experience alignment
-- 70-89 = Strong match - Most skills match, minor gaps acceptable
-- 50-69 = Moderate match - Some key skills match, but significant gaps exist
-- 30-49 = Weak match - Limited alignment, major skill gaps
-- 0-29 = Poor match - Minimal or no alignment, missing critical skills
+SCORING GUIDELINES (0-10 scale):
+- 9-10 = Perfect fit - All must-have skills match, strong experience alignment
+- 7-8 = Strong match - Most skills match, minor gaps acceptable
+- 5-6 = Moderate match - Some key skills match, but significant gaps exist
+- 3-4 = Weak match - Limited alignment, major skill gaps
+- 0-2 = Poor match - Minimal or no alignment, missing critical skills
 
 ANALYSIS REQUIREMENTS:
 - Be objective and honest about the match quality

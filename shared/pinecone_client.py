@@ -90,14 +90,27 @@ class VectorStore:
             List of dictionaries with 'id', 'metadata', 'score', and optionally 'values'
         """
         logger.info(f"Querying namespace: {namespace} with top_k={top_k}, filter={filter_dict}, include_values={include_values}")
-        query_result = self.index.query(
-            vector=query_vector,
-            top_k=top_k,
-            include_metadata=True,
-            include_values=include_values,
-            filter=filter_dict if filter_dict else None,
-            namespace=namespace
-        )
+        try:
+            query_result = self.index.query(
+                vector=query_vector,
+                top_k=top_k,
+                include_metadata=True,
+                include_values=include_values,
+                filter=filter_dict if filter_dict else None,
+                namespace=namespace
+            )
+        except Exception as e:
+            logger.error(
+                "Pinecone query failed: %s | context=%s",
+                str(e),
+                {
+                    "error_type": type(e).__name__,
+                    "namespace": namespace,
+                    "top_k": top_k,
+                    "filter": filter_dict,
+                },
+            )
+            raise
         
         # Convert Pinecone query result to list of dicts with metadata and score
         results = []
@@ -110,7 +123,57 @@ class VectorStore:
             if include_values and hasattr(match, 'values'):
                 result_dict["values"] = match.values
             results.append(result_dict)
+        
         logger.info(f"Query returned {len(results)} results from namespace: {namespace}")
+        
+        # Detailed logging for debugging
+        if len(results) > 0:
+            # Log first result details
+            first_result = results[0]
+            logger.info(
+                "pinecone_first_result_details %s",
+                {
+                    "result_id": first_result.get("id"),
+                    "result_score": first_result.get("score"),
+                    "metadata_keys": list(first_result.get("metadata", {}).keys()),
+                    "metadata_sample": {
+                        "title": first_result.get("metadata", {}).get("title", "N/A"),
+                        "company_name": first_result.get("metadata", {}).get("company_name", "N/A"),
+                        "location": first_result.get("metadata", {}).get("location", "N/A"),
+                        "industry": first_result.get("metadata", {}).get("industry", "N/A"),
+                        "company_stage": first_result.get("metadata", {}).get("company_stage", "N/A"),
+                        "category": first_result.get("metadata", {}).get("category", "N/A"),
+                        "experience_level": first_result.get("metadata", {}).get("experience_level", "N/A"),
+                        "remote_option": first_result.get("metadata", {}).get("remote_option", "N/A"),
+                    },
+                },
+            )
+        elif len(results) == 0 and filter_dict:
+            logger.warning(
+                "Pinecone query returned 0 results with filters: %s | context=%s",
+                filter_dict,
+                {
+                    "namespace": namespace,
+                    "top_k": top_k,
+                },
+            )
+            # Log filter details for debugging
+            logger.warning(
+                "pinecone_zero_results_debug %s",
+                {
+                    "namespace": namespace,
+                    "top_k": top_k,
+                    "filter_keys": list(filter_dict.keys()) if filter_dict else [],
+                    "filter_details": {
+                        k: {
+                            "type": type(v).__name__,
+                            "value": str(v)[:200] if v else None,
+                        }
+                        for k, v in (filter_dict.items() if filter_dict else {})
+                    },
+                },
+            )
+        
         return results
     
     def get_candidate_embedding(self, candidate_id: str, namespace: str = "cvs") -> Optional[List[float]]:

@@ -94,11 +94,36 @@ class MatchmakerAgent(BaseAgent):
         
         return None
 
+    def _normalize_score(self, score: Any, max_score: int) -> Optional[int]:
+        """
+        Normalize score to a 0-max_score integer range.
+        """
+        if score is None:
+            return None
+        try:
+            if isinstance(score, str):
+                extracted = self._extract_score_from_text(score)
+                if extracted is not None:
+                    score = extracted
+                else:
+                    score = int(score)
+            score_int = int(score)
+        except (ValueError, TypeError):
+            return None
+
+        # If model returned 0-100 but we want 0-10, scale down.
+        if max_score == 10 and score_int > 10:
+            score_int = round(score_int / 10)
+
+        return max(0, min(max_score, score_int))
+
     async def analyze_match(
         self,
         vacancy_text: str,
         candidate_persona: Dict[str, Any],
-        similarity_score: Optional[float] = None
+        similarity_score: Optional[float] = None,
+        system_prompt: Optional[str] = None,
+        score_max: int = 10
     ) -> Dict[str, Any]:
         """
         Analyze why a vacancy matches a candidate's persona.
@@ -110,7 +135,7 @@ class MatchmakerAgent(BaseAgent):
 
         Returns:
             Dictionary with:
-            - score: int - AI match score from 0 to 100
+            - score: int - AI match score from 0 to score_max
             - analysis: str - Text explanation highlighting connections and gaps
             - reasoning: str - Same as analysis (for backward compatibility)
         """
@@ -164,7 +189,7 @@ Analyze why this vacancy matches the candidate. Be extremely concise: 3-4 bullet
             messages = [HumanMessage(content=analysis_prompt)]
             # Limit response to 500 tokens (approximately 375 words) to prevent verbose responses
             # This ensures responses stay under 150 words as requested
-            response = await self.invoke(messages, max_tokens=500)
+            response = await self.invoke(messages, system_prompt=system_prompt, max_tokens=500)
             response_text = response.content if hasattr(response, "content") else str(response)
             
             # Parse JSON response (expected format: {"score": 0-100, "analysis": "text"})
@@ -179,35 +204,15 @@ Analyze why this vacancy matches the candidate. Be extremely concise: 3-4 bullet
                 parsed_json = json.loads(cleaned_text)
                 ai_score = parsed_json.get("score")
                 analysis_text = parsed_json.get("analysis", "")
-                
-                # Explicit Score Extraction: If score is a string like "85/100", extract the number
-                if ai_score is not None:
-                    if isinstance(ai_score, str):
-                        # Try to extract score from string format
-                        extracted_score = self._extract_score_from_text(ai_score)
-                        if extracted_score is not None:
-                            ai_score = extracted_score
-                        else:
-                            # Try to convert string directly to int
-                            try:
-                                ai_score = int(ai_score)
-                            except (ValueError, TypeError):
-                                logger.warning("match_score_string_conversion_failed", score=ai_score)
-                                ai_score = None
-                    elif isinstance(ai_score, (int, float)):
-                        # Convert to int and clamp to 0-100 range
-                        ai_score = int(ai_score)
-                        ai_score = max(0, min(100, ai_score))
-                    else:
-                        logger.warning("match_score_invalid_type", score=ai_score, score_type=type(ai_score).__name__)
-                        ai_score = None
+
+                ai_score = self._normalize_score(ai_score, score_max)
                 
             except json.JSONDecodeError:
                 # Fallback: Try to extract score from text format (for backward compatibility)
                 logger.warning("match_json_parse_failed", response_preview=response_text[:200])
                 
                 # Explicit Score Extraction: Try to extract score from text
-                ai_score = self._extract_score_from_text(response_text)
+                ai_score = self._normalize_score(response_text, score_max)
                 
                 if ai_score is not None:
                     # Remove score line from analysis text
@@ -259,6 +264,30 @@ Analyze why this vacancy matches the candidate. Be extremely concise: 3-4 bullet
         """
         parts = []
 
+        if persona.get("target_role"):
+            parts.append(f"Target Role: {persona['target_role']}")
+
+        if persona.get("category"):
+            parts.append(f"Category: {persona['category']}")
+
+        if persona.get("experience_level"):
+            parts.append(f"Experience Level: {persona['experience_level']}")
+
+        if persona.get("industry"):
+            parts.append(f"Industry: {persona['industry']}")
+
+        if persona.get("company_stage"):
+            parts.append(f"Company Stage: {persona['company_stage']}")
+
+        if persona.get("location"):
+            parts.append(f"Location Preference: {persona['location']}")
+
+        if persona.get("remote_preference"):
+            parts.append(f"Remote Preference: {persona['remote_preference']}")
+
+        if persona.get("salary_min") is not None:
+            parts.append(f"Minimum Salary: {persona['salary_min']}")
+
         if persona.get("technical_skills"):
             skills = persona["technical_skills"]
             if isinstance(skills, list):
@@ -279,7 +308,9 @@ Analyze why this vacancy matches the candidate. Be extremely concise: 3-4 bullet
         if persona.get("preferred_startup_stage"):
             parts.append(f"Preferred Company Stage: {persona['preferred_startup_stage']}")
 
-        if persona.get("industry_preferences"):
+        if persona.get("industry"):
+            parts.append(f"Industry: {persona['industry']}")
+        elif persona.get("industry_preferences"):
             industries = persona["industry_preferences"]
             if isinstance(industries, list):
                 parts.append(f"Industry Preferences: {', '.join(industries)}")

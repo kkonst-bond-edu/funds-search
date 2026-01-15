@@ -45,6 +45,13 @@ docker compose up -d --build
 
 ## System Design: Conversational AI Agent Architecture
 
+### 🎯 Conversational Flow (Streaming)
+
+- The Web UI streams graph events from `POST /chat/stream` (SSE).
+- **Talent Strategist** is the only component that asks questions.
+- If required info is missing, the system returns `missing_info` (ids) and `missing_questions` (human text).
+- Users can skip clarifying questions to proceed directly to search.
+
 ### ☁️ Cloud & Container Architecture
 
 The application is designed as a **cloud-native microservices architecture**, deployed via Docker containers. This ensures scalability, isolation, and consistent environments from development to production.
@@ -78,35 +85,39 @@ graph TD
 
         %% Specialized Agents
         subgraph "🤖 AI Agent Fleet (LangGraph)"
-            TS[<b>Talent Strategist</b><br/><i>Memory & Context</i><br/>DeepSeek V3]:::agent
-            JS[<b>Job Scout</b><br/><i>Search Architect</i><br/>DeepSeek V3]:::agent
-            MM[<b>Matchmaker</b><br/><i>Analyst</i><br/>DeepSeek V3]:::agent
-            VA[<b>Vacancy Analyst</b><br/><i>The Enricher</i><br/>DeepSeek V3]:::agent
+            TS[<b>Talent Strategist</b><br/><i>Memory & Context</i><br/>Configured LLM]:::agent
+            JS[<b>Job Scout</b><br/><i>Search Architect</i><br/>Configured LLM]:::agent
+            MM[<b>Matchmaker</b><br/><i>Analyst</i><br/>Configured LLM]:::agent
+            VLD[<b>Validator</b><br/><i>Hard Filters</i>]:::agent
+            VA[<b>Vacancy Analyst</b><br/><i>The Enricher</i><br/>Configured LLM]:::agent
         end
 
         %% Internal Services
         subgraph "⚙️ Microservices"
             EMB[🧮 Embedding Service<br/>BGE-M3 Model]:::service
-            CV[📄 CV Processor<br/>PDF OCR / Parser]:::service
+            CV[📄 CV Processor<br/>Docling PDF/DOCX Parser]:::service
         end
     end
 
     %% Data Storage
     subgraph "💾 Persistence Layer (Managed)"
         PC[(🌲 Pinecone Vector DB<br/><i>Vacancies Namespace</i>)]:::database
-        PC2[(🌲 Pinecone Vector DB<br/><i>Personas Namespace</i>)]:::database
+        PC2[(🌲 Pinecone Vector DB<br/><i>CVs Namespace</i>)]:::database
     end
 
     %% Connections
-    HUB -->|1. Analyze CV & Chat| TS
-    TS -->|UserPersona| HUB
+    HUB -->|1. Analyze Chat/CV| TS
+    TS -->|UserProfile| HUB
     HUB -->|2. Search Params| JS
     JS -->|Hybrid Query| HUB
     HUB -->|3. Search DB| EMB
     EMB -->|Vectors| PC
+    CV -->|Embeddings| EMB
+    CV -->|Chunks| PC2
     PC -->|Candidates| HUB
     HUB -->|4. Analysis| MM
-    MM -->|Ranked Matches| UI
+    MM -->|Match Results| VLD
+    VLD -->|Validated Results| UI
 ```
 
 ### 🧩 Parsing & Enrichment Pipeline
@@ -136,10 +147,10 @@ We avoid a single "all-knowing bot". Each agent is specialized, easier to debug,
 
 | Agent | Role | Model | Responsibility |
 |:------|:-----|:------|:---------------|
-| **Talent Strategist 🕵️‍♂️** | Memory & Profiler | **DeepSeek V3** | "The Brain". Maintains the **User Persona** across the conversation. Incrementally updates skills, preferences (remote, salary, stage), and context without forgetting previous details. |
-| **Job Scout 🛰️** | Search Architect | **DeepSeek V3** | "The Translator". Converts the human-readable User Persona into a **Hybrid Search Query** (Semantic Vector + Metadata Filters) for Pinecone. It understands implied constraints (e.g., "stability" -> "Series B+"). |
-| **Matchmaker 🤝** | Analyst | **DeepSeek V3** | "The Critic". Reads candidate profiles vs. retrieved vacancies line-by-line. Assigns a relevance score (0-100) and writes a "Why this fits" explanation. |
-| **Vacancy Analyst 🧠** | Enrichment | **DeepSeek V3** | Classifies raw job post text into standardized taxonomies (Category, Seniority) and extracts structured entities (Benefits, Tech Stack, Culture) before indexing. |
+| **Talent Strategist 🕵️‍♂️** | Memory & Profiler | **Configured LLM** | "The Brain". Maintains the **User Profile** across the conversation. Incrementally updates skills, preferences (remote, salary, stage), and context without forgetting previous details. |
+| **Job Scout 🛰️** | Search Architect | **Configured LLM** | "The Translator". Converts the human-readable User Profile into a **Hybrid Search Query** (Semantic Vector + Metadata Filters) for Pinecone. It understands implied constraints (e.g., "stability" -> "Series B+"). |
+| **Matchmaker 🤝** | Analyst | **Configured LLM** | "The Critic". Reads candidate profiles vs. retrieved vacancies line-by-line. Assigns a relevance score (0–10) and writes a "Why this fits" explanation. |
+| **Vacancy Analyst 🧠** | Enrichment | **Configured LLM** | Classifies raw job post text into standardized taxonomies (Category, Seniority) and extracts structured entities (Benefits, Tech Stack, Culture) before indexing. |
 
 ### Agent Workflow
 
@@ -165,6 +176,11 @@ graph LR
 
     subgraph "Phase 3: Analysis"
         MM[🤝 Matchmaker<br/>Rerank & Explain]:::agent
+        VA[✅ Validator<br/>Hard Filters]:::agent
+    end
+
+    subgraph "Phase 4: Finalization"
+        FV[📌 Final Validation<br/>Summary]:::process
     end
 
     END((Response)):::endnode
@@ -175,19 +191,19 @@ graph LR
     JS -->|Semantic Query + Filters| SV
     
     SV -->|Top Candidates| MM
-    TS -.->|UserPersona| MM
-    MM -->|Ranked Matches| END
+    TS -.->|UserProfile| MM
+    MM -->|Match Results| VA
+    VA -->|Validated Results| FV
+    FV --> END
 ```
 
-### CV Missing State
+### CV Optional State
 
-The system gracefully handles cases where a user hasn't uploaded their CV:
+The system works with or without an uploaded CV:
 
-- **Broad Search Mode**: When `persona` is missing, the system performs a general search without personalized matching
-- **Response Flags**: All vacancies include `persona_applied: false` and `match_score: 0`
-- **User Guidance**: Each vacancy displays: `"CV missing: Upload your resume in the 'Career & Match Hub' to enable AI matching."`
-- **Logging**: The system logs a `chat_search_without_persona` warning event when persona data is absent
-- **UI Feedback**: The web UI displays a warning banner and "Resume Required" badges when CV is missing
+- **Conversation-only profile**: The strategist builds a `UserProfile` from chat messages (skills, role, location, etc.)
+- **CV enrichment**: Uploading a CV improves extraction accuracy and evidence strength
+- **Search still runs**: Results are returned based on the conversation profile even without a CV
 
 > Provider choice is configuration. The docs describe intent; your `.env` decides which providers are enabled.
 
@@ -197,7 +213,7 @@ The system gracefully handles cases where a user hasn't uploaded their CV:
 
 - `apps/api/` — FastAPI gateway (chat/search endpoints, diagnostics)
 - `apps/orchestrator/` — LangGraph orchestration (agent flow + state)
-- `apps/web-ui/` — Streamlit UI (chat + system diagnostics)
+- `apps/web_ui/` — Streamlit UI (chat + system diagnostics)
 - `services/embedding-service/` — BGE-M3 embeddings (HTTP service)
 - `services/cv-processor/` — PDF parsing + text extraction (HTTP service)
 - `shared/` — shared schemas, clients, Pinecone helpers

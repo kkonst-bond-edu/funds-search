@@ -3,6 +3,7 @@ FastAPI main application for funds-search.
 Refactored to use LangGraph orchestrator.
 """
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -13,6 +14,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from apps.orchestrator import (
     LLMProviderFactory,
@@ -29,8 +31,13 @@ from shared.schemas import (
     SystemDiagnosticsResponse,
     VacancyMatchResult,
 )
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, AsyncGenerator
 from pydantic import BaseModel
+from langchain_core.messages import HumanMessage, AIMessage
+
+from apps.orchestrator.graph.builder import graph as conversation_graph
+from apps.orchestrator.graph.nodes import _convert_user_persona_to_profile
+from apps.orchestrator.graph.state import UserProfile
 
 # Import vacancies router
 # Note: PYTHONPATH should be set to project root, no manual sys.path manipulation needed
@@ -63,6 +70,14 @@ from src.services.scraper.main import main as run_scraper_logic
 class ScraperRequest(BaseModel):
     filters: Optional[Dict[str, Any]] = None
 
+
+class ChatStreamRequest(BaseModel):
+    message: str
+    history: Optional[List[Dict[str, Any]]] = None
+    persona: Optional[Dict[str, Any]] = None
+    user_profile: Optional[Dict[str, Any]] = None
+    skip_questions: Optional[bool] = False
+
 @app.post("/api/v1/admin/scrape")
 async def trigger_scrape(request: ScraperRequest):
     """Trigger the scraper with optional filters."""
@@ -86,6 +101,86 @@ async def health():
 async def health_v1():
     """Health check endpoint with API v1 prefix."""
     return {"status": "ok", "version": "2.0.0"}
+
+
+def _serialize_candidate_pool(candidate_pool: Any) -> List[Dict[str, Any]]:
+    serialized = []
+    for item in candidate_pool or []:
+        if hasattr(item, "model_dump"):
+            serialized.append(item.model_dump())
+        elif hasattr(item, "dict"):
+            serialized.append(item.dict())
+        elif isinstance(item, dict):
+            serialized.append(item)
+        else:
+            serialized.append({"value": str(item)})
+    return serialized
+
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatStreamRequest) -> StreamingResponse:
+    """
+    Stream graph events for conversational search using LangGraph.
+    """
+    messages = []
+    for msg in request.history or []:
+        role = msg.get("role")
+        content = msg.get("content", "")
+        if not content:
+            continue
+        if role in ("user", "human"):
+            messages.append(HumanMessage(content=content))
+        elif role in ("assistant", "ai"):
+            messages.append(AIMessage(content=content))
+
+    if request.message:
+        messages.append(HumanMessage(content=request.message))
+
+    user_profile = None
+    if request.user_profile:
+        try:
+            user_profile = UserProfile(**request.user_profile)
+        except Exception:
+            user_profile = None
+    elif request.persona:
+        user_profile = _convert_user_persona_to_profile(request.persona)
+
+    if request.skip_questions:
+        if user_profile:
+            user_profile.skip_questions = True
+        else:
+            user_profile = UserProfile(skip_questions=True)
+
+    initial_state = {
+        "messages": messages,
+        "user_profile": user_profile,
+        "candidate_pool": [],
+        "match_results": [],
+        "search_params": {},
+        "status": "new",
+        "missing_info": [],
+        "missing_questions": [],
+    }
+
+    async def event_stream() -> AsyncGenerator[str, None]:
+        try:
+            async for event in conversation_graph.astream_events(initial_state, version="v2"):
+                if isinstance(event, dict):
+                    data = event.get("data")
+                    if isinstance(data, dict) and "output" in data and isinstance(data["output"], dict):
+                        output = data["output"]
+                        if "candidate_pool" in output:
+                            output["candidate_pool"] = _serialize_candidate_pool(output.get("candidate_pool"))
+                        if "user_profile" in output and hasattr(output["user_profile"], "model_dump"):
+                            output["user_profile"] = output["user_profile"].model_dump()
+                        data["output"] = output
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            error_event = {"event": "error", "data": {"message": str(e)}}
+            yield f"data: {json.dumps(error_event)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/search", response_model=List[MatchResult])

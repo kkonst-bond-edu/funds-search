@@ -17,6 +17,10 @@ Return a JSON object with ONLY the fields that should be UPDATED. Use null to cl
 VALID FIELDS (use ONLY these field names):
 - technical_skills: List[str] - Technical skills (e.g., ["Python", "FastAPI"])
 - career_goals: List[str] - Career goals and aspirations
+- target_roles: List[str] - Target role titles (e.g., ["Visual Designer"])
+- preferred_categories: List[str] - Job categories (e.g., ["Design", "Engineering"])
+- preferred_experience_levels: List[str] - Experience levels (e.g., ["Junior", "Mid"])
+- preferred_industries: List[str] - Industries (e.g., ["Bio + Health", "Fintech"])
 - preferred_company_stages: List[str] - Company stages (e.g., ["Seed", "Series A", "Growth", "Public"])
 - preferred_locations: List[str] - Job locations (e.g., ["San Francisco", "Remote", "London"])
 - salary_min: int - Minimum salary in USD (e.g., 150000)
@@ -28,6 +32,9 @@ Example updates:
 - User says "I want remote only" → {"remote_only": true}
 - User says "I don't like early stage startups" → {"preferred_company_stages": ["Series B", "Series C", "Growth", "Public"]}
 - User mentions "Python, FastAPI" → {"technical_skills": ["Python", "FastAPI"]} (add to existing, don't replace)
+- User says "I'm a Visual Designer" → {"target_roles": ["Visual Designer"], "preferred_categories": ["Design"]}
+- User says "Mid level" → {"preferred_experience_levels": ["Mid"]}
+- User says "I'm interested in Bio + Health" → {"preferred_industries": ["Bio + Health"]}
 - User says "minimum $150k" → {"salary_min": 150000}
 - User says "I'm interested in Fintech" → {"chat_context": "Interested in Fintech industry"}
 - User says "I'm a Python developer" → {"technical_skills": ["Python"]}
@@ -38,3 +45,6 @@ IMPORTANT:
 - Store unstructured insights in chat_context field
 - Be conservative: only update what is clearly stated or implied
 
+OPERATIONAL GUIDELINES:
+- Salary expectations are secondary. If the user provided skills and role preferences but avoided the salary question, set ready_for_search to True.
+- Do not ask about salary more than once if the user ignored it.

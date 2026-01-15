@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "graph": "apps.orchestrator.graph.builder:graph"
+  },
+  "env": ".env"
+}

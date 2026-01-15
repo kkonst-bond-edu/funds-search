@@ -20,7 +20,7 @@ The service integrates with the following components:
 
 1. **CV Processor** (Port 8002 on host, 8001 in container): FastAPI service that processes CVs
 2. **Embedding Service** (Port 8001): Generates embeddings using BGE-M3 model
-3. **Pinecone Vector Store**: Cloud vector database (Index: `funds-search`, Namespace: `resumes`)
+3. **Pinecone Vector Store**: Cloud vector database (Index: `funds-search`, Namespace: `cvs`)
 
 ## API Endpoints
 
@@ -152,7 +152,7 @@ The Dockerfile includes:
 
 Each resume chunk is stored as a separate vector in Pinecone:
 - **Index**: `funds-search` (configurable via `PINECONE_INDEX_NAME`)
-- **Namespace**: `resumes`
+- **Namespace**: `cvs`
 - **Vector ID**: `{user_id}_{resume_id}_chunk_{index}`
 - **Metadata**: Includes user_id, resume_id, text (truncated), and chunk metadata
 

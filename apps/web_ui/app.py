@@ -3,6 +3,7 @@ Streamlit web UI for funds-search system.
 Provides a user-friendly interface for CV processing, vacancy processing, and matching.
 """
 
+import json
 import logging
 import os
 import socket
@@ -653,6 +654,45 @@ def render_score_badges(pinecone_score: Optional[float], score: Optional[float] 
     st.markdown(scores_container, unsafe_allow_html=True)
 
 
+def enrich_vacancies_with_matches(vacancies: List[dict], match_results: List[dict]) -> List[dict]:
+    if not vacancies:
+        return []
+    match_lookup = {}
+    for match in match_results or []:
+        vacancy_id = match.get("vacancy_id")
+        if vacancy_id:
+            match_lookup[vacancy_id] = match
+    enriched = []
+    for vacancy in vacancies:
+        if hasattr(vacancy, "dict"):
+            vacancy_data = vacancy.dict()
+        elif hasattr(vacancy, "model_dump"):
+            vacancy_data = vacancy.model_dump()
+        elif isinstance(vacancy, dict):
+            vacancy_data = dict(vacancy)
+        else:
+            vacancy_data = {"value": str(vacancy)}
+        vacancy_id = vacancy_data.get("id") or vacancy_data.get("description_url")
+        match = match_lookup.get(vacancy_id)
+        if match:
+            overall_score = match.get("overall_score")
+            role_score = match.get("role_score")
+            company_score = match.get("company_score")
+            vacancy_data["overall_score"] = overall_score
+            vacancy_data["role_score"] = role_score
+            vacancy_data["company_score"] = company_score
+            vacancy_data["role_match_summary"] = match.get("role_match_summary")
+            vacancy_data["company_match_summary"] = match.get("company_match_summary")
+            vacancy_data["role_evidence"] = match.get("role_evidence")
+            vacancy_data["company_evidence"] = match.get("company_evidence")
+            if overall_score is not None:
+                vacancy_data["ai_match_score"] = float(overall_score)
+            if match.get("overall_analysis"):
+                vacancy_data["ai_insight"] = match.get("overall_analysis")
+        enriched.append(vacancy_data)
+    return enriched
+
+
 def display_vacancy_card(vacancy: dict, index: int):
     """
     Display a vacancy card in the chat interface with a design similar to Shield AI / Compact Layout.
@@ -722,6 +762,12 @@ def display_vacancy_card(vacancy: dict, index: int):
     # Profiles
     role_profile = get_nested(vacancy, "ai_ready_views.role_profile_text")
     company_profile = get_nested(vacancy, "ai_ready_views.company_profile_text")
+    role_score = vacancy.get("role_score")
+    company_score = vacancy.get("company_score")
+    role_summary = vacancy.get("role_match_summary")
+    company_summary = vacancy.get("company_match_summary")
+    role_evidence = vacancy.get("role_evidence") or []
+    company_evidence = vacancy.get("company_evidence") or []
     
     # Tag Groups
     # 1. Tech Stack
@@ -748,7 +794,12 @@ def display_vacancy_card(vacancy: dict, index: int):
     # Scores
     score = vacancy.get("score")
     ai_match_score = vacancy.get("ai_match_score")
-    current_score = score if score is not None else (ai_match_score * 10 if ai_match_score is not None else None)
+    if score is not None:
+        current_score = score
+    elif ai_match_score is not None:
+        current_score = ai_match_score
+    else:
+        current_score = None
     ai_insight = vacancy.get("ai_insight") or vacancy.get("match_reasoning") or vacancy.get("match_reason")
 
     # --- HTML Construction ---
@@ -762,8 +813,8 @@ def display_vacancy_card(vacancy: dict, index: int):
     if not is_manual_search and (not has_persona or not persona_applied):
          score_html = '<div style="text-align: right; font-size: 12px; color: #666;">Upload CV for match</div>'
     elif current_score is not None:
-        color = "#22c55e" if current_score >= 80 else "#eab308" if current_score >= 50 else "#ef4444"
-        score_html = f'<div style="text-align: right;"><div style="font-size: 24px; font-weight: 700; color: {color};">{int(current_score)}%</div><div style="font-size: 11px; color: #666;">Match</div></div>'
+        color = "#22c55e" if current_score >= 8 else "#eab308" if current_score >= 5 else "#ef4444"
+        score_html = f'<div style="text-align: right;"><div style="font-size: 24px; font-weight: 700; color: {color};">{current_score:.1f}/10</div><div style="font-size: 11px; color: #666;">Match</div></div>'
     
     # Signals HTML
     signals_list = []
@@ -806,17 +857,39 @@ def display_vacancy_card(vacancy: dict, index: int):
     
     # Build specific sections
     role_profile_html = ""
-    if role_profile:
+    if role_profile or role_summary:
+        role_score_html = ""
+        if role_score is not None:
+            role_score_html = f'<div style="margin-top: 6px; font-weight: 700;">Role match: {role_score}/10</div>'
+        role_summary_html = f'<div class="profile-text" style="margin-top: 6px;">{role_summary}</div>' if role_summary else ""
+        role_evidence_html = ""
+        if role_evidence:
+            evidence_text = ", ".join(role_evidence[:2])
+            role_evidence_html = f'<div class="profile-text" style="margin-top: 6px; font-size: 12px; color: #6b7280;"><strong>Evidence:</strong> {evidence_text}</div>'
         role_profile_html = f'''<div class="profile-section">
     <div class="profile-label">Role Profile</div>
-    <div class="profile-text">{role_profile}</div>
+    <div class="profile-text">{role_profile or ""}</div>
+    {role_score_html}
+    {role_summary_html}
+    {role_evidence_html}
 </div>'''
 
     company_profile_html = ""
-    if company_profile:
+    if company_profile or company_summary:
+        company_score_html = ""
+        if company_score is not None:
+            company_score_html = f'<div style="margin-top: 6px; font-weight: 700;">Company match: {company_score}/10</div>'
+        company_summary_html = f'<div class="profile-text" style="margin-top: 6px;">{company_summary}</div>' if company_summary else ""
+        company_evidence_html = ""
+        if company_evidence:
+            evidence_text = ", ".join(company_evidence[:2])
+            company_evidence_html = f'<div class="profile-text" style="margin-top: 6px; font-size: 12px; color: #6b7280;"><strong>Evidence:</strong> {evidence_text}</div>'
         company_profile_html = f'''<div class="profile-section">
     <div class="profile-label">Company Profile</div>
-    <div class="profile-text">{company_profile}</div>
+    <div class="profile-text">{company_profile or ""}</div>
+    {company_score_html}
+    {company_summary_html}
+    {company_evidence_html}
 </div>'''
     
     # Helper to build tag block
@@ -993,6 +1066,13 @@ if "chat_messages" not in st.session_state:
 if "persona" not in st.session_state:
     st.session_state.persona = None
 
+# Initialize user_profile if not exists (graph-driven flow)
+if "user_profile" not in st.session_state:
+    st.session_state.user_profile = None
+
+if "skip_request" not in st.session_state:
+    st.session_state.skip_request = None
+
 # Main UI
 st.title("AI Talent Matcher")
 st.info("✅ Search Mode: Database (Verified)")
@@ -1119,9 +1199,17 @@ with tab_chat:
         st.info("🎯 AI is using your CV profile for personalized search.")
 
     # Display chat history
-    for message in st.session_state.chat_messages:
+    for idx, message in enumerate(st.session_state.chat_messages):
         with st.chat_message(message["role"]):
             st.write(message["content"])
+            missing_questions = message.get("missing_questions", [])
+            if message["role"] == "assistant" and missing_questions:
+                st.markdown("**Нужно уточнить:**")
+                for question in missing_questions:
+                    st.write(f"- {question}")
+                if st.button("Пропустить вопросы", key=f"skip_questions_{idx}"):
+                    st.session_state.skip_request = {"message": "skip"}
+                    st.rerun()
 
             # If this is an assistant message with vacancies, display them
             if message["role"] == "assistant" and "vacancies" in message:
@@ -1180,125 +1268,145 @@ with tab_chat:
                     st.info(f"📋 Showing top 5 results. {total_vacancies - 5} more vacancy/vacancies available.")
 
     # Chat input
-    if user_input := st.chat_input("Describe what role you're looking for..."):
-        # Add user message to chat history
-        st.session_state.chat_messages.append({"role": "user", "content": user_input})
+    user_input = st.chat_input("Describe what role you're looking for...")
+    skip_payload = st.session_state.get("skip_request")
+    incoming_message = None
+    display_message = None
+    skip_questions = False
 
-        # Initialize variables for assistant response
+    if skip_payload:
+        incoming_message = "skip"
+        display_message = "Пропустить вопросы"
+        skip_questions = True
+        st.session_state.skip_request = None
+    elif user_input:
+        incoming_message = user_input
+        display_message = user_input
+
+    if incoming_message:
+        st.session_state.chat_messages.append({"role": "user", "content": display_message})
+
         summary = ""
         vacancies = []
+        missing_info = []
+        missing_questions = []
+        match_results = []
 
-        # Show status while processing
         with st.status("AI is analyzing your request...", expanded=True) as status:
             try:
-                # Call chat API
-                chat_endpoint = f"{BACKEND_API_URL}/api/v1/vacancies/chat"
-                logger.info(f"Calling chat endpoint: {chat_endpoint}")
+                chat_endpoint = f"{BACKEND_API_URL}/chat/stream"
+                logger.info(f"Calling chat stream endpoint: {chat_endpoint}")
 
-                # Persona Check: Check if persona exists in session state
                 persona = st.session_state.get("persona")
-                # Only include persona if it's a valid non-empty dict
                 if persona and isinstance(persona, dict) and len(persona) > 0:
                     persona_keys = list(persona.keys())
                     logger.info(f"persona_found_in_session: has_persona=True, persona_keys={persona_keys}")
                 else:
-                    persona = None  # Ensure persona is None if invalid
+                    persona = None
                     logger.warning("persona_not_found_in_session: No persona data available. CV may not have been analyzed yet.")
 
-                # Prepare request payload with history and persona
-                # Convert chat_messages to history format (exclude the current message we just added)
                 history = []
-                for msg in st.session_state.chat_messages[:-1]:  # Exclude the last message (current user input)
+                for msg in st.session_state.chat_messages[:-1]:
                     if msg.get("role") in ["user", "assistant"]:
                         history.append({
                             "role": msg["role"],
                             "content": msg.get("content", "")
                         })
 
-                # API Request: Ensure persona is included in the request (or None if missing)
-                chat_data = {
-                    "message": user_input,
-                    "persona": persona,  # Will be None if CV not uploaded
+                request_payload = {
+                    "message": incoming_message,
                     "history": history
                 }
-            
-                # Debugging: Log persona data (hidden in expander for debugging)
+                if skip_questions:
+                    request_payload["skip_questions"] = True
+                if st.session_state.get("user_profile"):
+                    request_payload["user_profile"] = st.session_state.user_profile
+                elif persona:
+                    request_payload["persona"] = persona
+
                 with st.expander("🔍 Debug: Request Payload", expanded=False):
                     debug_payload = {
-                        "message": user_input,
+                        "message": incoming_message,
+                        "skip_questions": skip_questions,
                         "has_persona": persona is not None,
+                        "has_user_profile": st.session_state.get("user_profile") is not None,
                         "persona_keys": list(persona.keys()) if isinstance(persona, dict) else None,
-                        "persona_preview": {k: str(v)[:50] + "..." if len(str(v)) > 50 else v for k, v in list(persona.items())[:3]} if isinstance(persona, dict) else None,
                         "history_length": len(history)
                     }
                     st.json(debug_payload)
-                    if persona:
-                        st.success("✅ Persona data is being sent to API")
-                    else:
-                        st.warning("⚠️ No persona data - CV may not have been analyzed. Upload your CV in the Career & Match Hub tab first.")
 
-                request_payload = chat_data
+                last_state = None
+                tool_searching = False
+                step_labels = {
+                    "strategist": "🧠 Analyzing profile...",
+                    "job_scout": "🔍 Searching...",
+                    "matchmaker": "🧩 Ranking matches...",
+                    "validator": "✅ Validating results..."
+                }
+                step_done_labels = {
+                    "strategist": "✅ Profile analyzed",
+                    "job_scout": "✅ Search complete",
+                    "matchmaker": "✅ Ranking complete",
+                    "validator": "✅ Validation complete"
+                }
 
-                with httpx.Client(timeout=120.0) as client:
-                    response = client.post(
-                        chat_endpoint,
-                        json=request_payload
-                    )
-                    response.raise_for_status()
-                    result = response.json()
+                with httpx.Client(timeout=TIMEOUT) as client:
+                    with client.stream("POST", chat_endpoint, json=request_payload) as response:
+                        response.raise_for_status()
+                        for line in response.iter_lines():
+                            if not line:
+                                continue
+                            if not line.startswith("data:"):
+                                continue
+                            payload = line.replace("data:", "", 1).strip()
+                            if not payload or payload == "[DONE]":
+                                continue
+                            event = json.loads(payload)
 
-                # Extract results
-                vacancies = result.get("vacancies", [])
-                summary = result.get("summary", "Found matching vacancies.")
-                debug_info = result.get("debug_info", {})
-                persona_applied = result.get("persona_applied", False)
-                
-                # ========================================================================
-                # Save updated persona to session state (MEMORY PERSISTENCE)
-                # ========================================================================
-                # This ensures persona evolves over the conversation, remembering
-                # user preferences, skills, and requirements from previous messages
-                updated_persona = result.get("updated_persona")
-                if updated_persona:
-                    st.session_state.persona = updated_persona
-                    persona_keys = list(updated_persona.keys()) if isinstance(updated_persona, dict) else []
-                    logger.info(
-                        f"persona_updated_in_session: persona_keys={persona_keys}, "
-                        f"has_skills={bool(updated_persona.get('technical_skills'))}, "
-                        f"remote_only={updated_persona.get('remote_only')}, "
-                        f"preferred_company_stages={updated_persona.get('preferred_company_stages')}, "
-                        f"preferred_locations={updated_persona.get('preferred_locations')}"
-                    )
-                elif not st.session_state.get("persona"):
-                    # Initialize empty persona if not present
-                    st.session_state.persona = {}
-            
-                # Extract search statistics if available (from VacancySearchResponse structure)
-                # Note: The chat endpoint may not return these directly, but we can construct from available data
-                search_stats = {}
-                # Check if statistics are in the result (from search endpoint) or construct from vacancies
-                if "total_after_filters" in result:
-                    search_stats["total_after_filters"] = result.get("total_after_filters", len(vacancies))
-                    search_stats["initial_vector_matches"] = result.get("initial_vector_matches", len(vacancies))
-                    search_stats["total_in_db"] = result.get("total_in_db")
+                            event_type = event.get("event")
+                            name = event.get("name")
+                            if event_type == "on_chain_start" and name in step_labels:
+                                status.update(label=step_labels[name], state="running")
+                            elif event_type == "on_chain_end" and name in step_done_labels:
+                                status.update(label=step_done_labels[name], state="running")
+                            elif event_type == "on_tool_start" and name == "search_vacancies_tool":
+                                tool_searching = True
+                                status.update(label="🔍 Searching...", state="running")
+                            elif event_type == "on_tool_end" and name == "search_vacancies_tool":
+                                status.update(label="✅ Search complete", state="running")
+
+                            output = event.get("data", {}).get("output")
+                            if isinstance(output, dict):
+                                last_state = output
+                                if output.get("candidate_pool") is not None:
+                                    vacancies = output.get("candidate_pool") or []
+                                if output.get("missing_info") is not None:
+                                    missing_info = output.get("missing_info") or []
+                                if output.get("missing_questions") is not None:
+                                    missing_questions = output.get("missing_questions") or []
+                                if output.get("match_results") is not None:
+                                    match_results = output.get("match_results") or []
+                                if output.get("user_profile") is not None:
+                                    st.session_state.user_profile = output.get("user_profile")
+
+                if tool_searching:
+                    status.update(label="✅ Search completed!", state="complete")
                 else:
-                    # Construct basic stats from available data
-                    search_stats["total_after_filters"] = len(vacancies)
-                    search_stats["initial_vector_matches"] = len(vacancies)  # Default to same if unknown
+                    status.update(label="✅ Ready", state="complete")
 
-                status.update(label="✅ Search completed!", state="complete")
+                if last_state:
+                    status_value = last_state.get("status")
+                    if status_value == "awaiting_info" and (missing_questions or missing_info):
+                        summary = "I need a bit more info to search."
+                    elif vacancies:
+                        summary = f"Found {len(vacancies)} matching roles."
+                    else:
+                        summary = "No matching vacancies found."
 
             except httpx.HTTPStatusError as e:
                 status.update(label="❌ API Error", state="error")
                 error_detail = e.response.text[:200] if e.response.text else "Unknown error"
-                try:
-                    error_json = e.response.json()
-                    error_detail = error_json.get("detail", error_detail)
-                except Exception:
-                    pass
-
-                # Add error message to chat
-                error_message = "Sorry, an error occurred while searching for vacancies. Please try again or refine your query."
+                error_message = "Sorry, an error occurred while searching for vacancies. Please try again."
                 if e.response.status_code == 422:
                     error_message = "Could not understand your query. Please try describing the role, skills, or industry in more detail."
                 elif e.response.status_code == 500:
@@ -1321,7 +1429,7 @@ with tab_chat:
 
             except Exception as e:
                 status.update(label="❌ Unexpected Error", state="error")
-                logger.error(f"Chat search error: {str(e)}")
+                logger.error(f"Chat stream error: {str(e)}")
                 error_message = f"An unexpected error occurred: {str(e)[:100]}"
                 st.session_state.chat_messages.append({
                     "role": "assistant",
@@ -1329,15 +1437,17 @@ with tab_chat:
                 })
                 st.rerun()
 
-        # Add assistant response with summary and vacancies (only if we have them)
-        if summary or vacancies:
+        enriched_vacancies = enrich_vacancies_with_matches(vacancies, match_results)
+        if summary or enriched_vacancies or missing_questions or missing_info:
             st.session_state.chat_messages.append({
                 "role": "assistant",
                 "content": summary if summary else "Found matching vacancies.",
-                "vacancies": vacancies,
-                "debug_info": debug_info if 'debug_info' in locals() else {},
-                "search_stats": search_stats if 'search_stats' in locals() else {},
-                "persona_applied": persona_applied if 'persona_applied' in locals() else False
+                "vacancies": enriched_vacancies,
+                "missing_questions": missing_questions if missing_questions else [],
+                "missing_info": missing_info if missing_info else [],
+                "debug_info": {},
+                "search_stats": {},
+                "persona_applied": bool(st.session_state.get("user_profile"))
             })
 
         st.rerun()

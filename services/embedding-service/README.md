@@ -213,7 +213,7 @@ curl -X POST http://localhost:8001/embed \
 
 2. **Run the container:**
    ```bash
-   docker run -p 8001:8000 embedding-service
+  docker run -p 8001:8001 embedding-service
    ```
 
    **Note**: The Dockerfile pre-downloads the model during build, so first build may take longer.
