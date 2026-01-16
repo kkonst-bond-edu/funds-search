@@ -69,12 +69,10 @@ def should_research(state: AgentState) -> str:
         
         if research_count >= max_research_iterations or total_attempts >= max_total_attempts:
             logger.warning(
-                "max_research_iterations_reached",
-                iterations=research_count,
-                search_attempt=search_attempt,
-                total_attempts=total_attempts,
-                max_research_iterations=max_research_iterations,
-                max_total_attempts=max_total_attempts,
+                "max_research_iterations_reached "
+                f"iterations={research_count} search_attempt={search_attempt} "
+                f"total_attempts={total_attempts} max_research_iterations={max_research_iterations} "
+                f"max_total_attempts={max_total_attempts}"
             )
             return "complete"  # Stop re-searching to prevent infinite loop
         
@@ -85,7 +83,7 @@ def should_research(state: AgentState) -> str:
         return "complete"
     else:
         # Default to complete
-        logger.warning("unclear_validation_status", status=status)
+        logger.warning(f"unclear_validation_status status={status}")
         return "complete"
 
 

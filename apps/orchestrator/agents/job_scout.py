@@ -309,7 +309,8 @@ class JobScoutAgent(BaseAgent):
     async def search_with_tool(
         self,
         user_profile: Optional[Dict[str, Any]],
-        conversation_history: Optional[List[Any]] = None
+        conversation_history: Optional[List[Any]] = None,
+        system_prompt: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Perform job search using the search_vacancies_tool.
@@ -348,7 +349,9 @@ class JobScoutAgent(BaseAgent):
                 context_parts.append(f"Experience level: {user_profile['experience_level']}")
             if user_profile.get("industry"):
                 context_parts.append(f"Industry: {user_profile['industry']}")
-            if user_profile.get("company_stage"):
+            if user_profile.get("company_stage_pref"):
+                context_parts.append(f"Company stage: {user_profile['company_stage_pref']}")
+            elif user_profile.get("company_stage"):
                 context_parts.append(f"Company stage: {user_profile['company_stage']}")
             if user_profile.get("skills"):
                 context_parts.append(f"Skills: {', '.join(user_profile['skills'][:5])}")
@@ -358,7 +361,9 @@ class JobScoutAgent(BaseAgent):
                 context_parts.append(f"Location preference: {user_profile['location']}")
             if user_profile.get("remote_preference"):
                 context_parts.append(f"Remote preference: {user_profile['remote_preference']}")
-            if user_profile.get("salary_expectation"):
+            if user_profile.get("salary_min") is not None:
+                context_parts.append(f"Minimum salary: {user_profile['salary_min']}")
+            elif user_profile.get("salary_expectation"):
                 context_parts.append(f"Salary expectation: {user_profile['salary_expectation']}")
         
         context_message = "User Profile:\n" + "\n".join(context_parts) if context_parts else "No user profile available."
@@ -371,8 +376,15 @@ class JobScoutAgent(BaseAgent):
         
         context_message += "\n\nPlease analyze the user's profile and preferences, then use search_vacancies_tool to find matching job vacancies."
         
+        if system_prompt is None:
+            system_prompt = self._load_prompt(self.prompt_file)
+
         # Create messages for LLM
-        messages = [HumanMessage(content=context_message)]
+        from langchain_core.messages import SystemMessage
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=context_message),
+        ]
         
         try:
             # Invoke LLM with tool binding
@@ -411,6 +423,28 @@ class JobScoutAgent(BaseAgent):
                         employee_count = args.get("employee_count") if isinstance(args, dict) else getattr(args, "employee_count", None)
                         top_k = args.get("top_k", 10) if isinstance(args, dict) else getattr(args, "top_k", 10)
                         
+                        # Override tool args with current profile preferences
+                        profile_company_stage = None
+                        if user_profile:
+                            profile_company_stage = (
+                                user_profile.get("company_stage_pref")
+                                or user_profile.get("company_stage")
+                            )
+                        if profile_company_stage:
+                            if isinstance(profile_company_stage, list):
+                                company_stage = profile_company_stage
+                            else:
+                                company_stage = [profile_company_stage]
+
+                        profile_salary_min = None
+                        if user_profile:
+                            profile_salary_min = user_profile.get("salary_min")
+                        if profile_salary_min is not None:
+                            try:
+                                salary_min = int(profile_salary_min)
+                            except (TypeError, ValueError):
+                                salary_min = None
+
                         # Build params dict for validation
                         search_params = {
                             "query": query,

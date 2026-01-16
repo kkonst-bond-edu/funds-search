@@ -16,7 +16,7 @@ from langchain_core.messages import HumanMessage, BaseMessage, AIMessage
 
 from apps.orchestrator.graph.state import AgentState, UserProfile
 from apps.orchestrator.agents.talent_strategist import TalentStrategistAgent
-from apps.orchestrator.agents.job_scout import JobScoutAgent
+from apps.orchestrator.tools.search_tool import search_vacancies_tool
 from apps.orchestrator.agents.matchmaker import MatchmakerAgent
 from shared.pinecone_client import VectorStore
 from src.schemas.vacancy import Vacancy, RoleCategory, ExperienceLevel, CompanyStage
@@ -55,6 +55,359 @@ def _normalize_office_only_location(location: Optional[str]) -> Optional[str]:
     if normalized in NON_LOCATION_PHRASES:
         return None
     return location
+
+
+def _escape_xml_value(value: Optional[str]) -> str:
+    if value is None:
+        return ""
+    return (
+        str(value)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
+
+
+def get_context_prompt(state: AgentState) -> str:
+    """
+    Build XML-like context block for system prompts.
+    """
+    user_profile = state.get("user_profile")
+    cv_text = state.get("cv_text") or ""
+    is_cv_attached = bool(state.get("is_cv_attached", False))
+
+    summary = user_profile.summary if user_profile else ""
+    skills = user_profile.skills if user_profile and user_profile.skills else []
+    experience_years = user_profile.experience_years if user_profile else 0
+    location_pref = user_profile.location_pref if user_profile else ""
+    salary_expectation = user_profile.salary_expectation if user_profile else 0
+    industries = user_profile.industries if user_profile and user_profile.industries else []
+
+    skills_lines = "\n".join(
+        f"      <skill>{_escape_xml_value(skill)}</skill>" for skill in skills
+    )
+    industries_lines = "\n".join(
+        f"      <industry>{_escape_xml_value(industry)}</industry>" for industry in industries
+    )
+
+    context_lines = [
+        "<context>",
+        "  <priority_note>Always prioritize this context over conflicting message history.</priority_note>",
+        "  <user_profile>",
+        f"    <summary>{_escape_xml_value(summary)}</summary>",
+        f"    <experience_years>{experience_years}</experience_years>",
+        f"    <location_pref>{_escape_xml_value(location_pref)}</location_pref>",
+        f"    <salary_expectation>{salary_expectation}</salary_expectation>",
+        "    <skills>",
+        skills_lines if skills_lines else "      <skill></skill>",
+        "    </skills>",
+        "    <industries>",
+        industries_lines if industries_lines else "      <industry></industry>",
+        "    </industries>",
+        "  </user_profile>",
+        f"  <cv_text attached=\"{str(is_cv_attached).lower()}\">{_escape_xml_value(cv_text)}</cv_text>",
+        "</context>",
+    ]
+
+    return "\n".join(context_lines)
+
+
+def _clean_json_response(text: str) -> str:
+    if not text:
+        return "{}"
+    cleaned = text.strip()
+    if "```" in cleaned:
+        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', cleaned, re.DOTALL)
+        if json_match:
+            cleaned = json_match.group(1)
+        else:
+            cleaned = cleaned.replace("```json", "").replace("```", "").strip()
+    cleaned = cleaned.strip()
+    if not cleaned.startswith("{"):
+        json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+        if json_match:
+            cleaned = json_match.group(0)
+    return cleaned
+
+
+def _coerce_str_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _parse_user_profile_response(response_text: str, fallback: UserProfile) -> UserProfile:
+    cleaned = _clean_json_response(response_text)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return fallback
+    if not isinstance(data, dict):
+        return fallback
+
+    merged = fallback.model_dump()
+    for key in [
+        "summary",
+        "skills",
+        "experience_years",
+        "location_pref",
+        "salary_expectation",
+        "salary_min",
+        "industries",
+        "company_stage_pref",
+        "target_seniority",
+    ]:
+        if key in data and data[key] is not None:
+            merged[key] = data[key]
+
+    merged["skills"] = _coerce_str_list(merged.get("skills"))
+    merged["industries"] = _coerce_str_list(merged.get("industries"))
+    merged["company_stage_pref"] = _coerce_str_list(merged.get("company_stage_pref"))
+
+    try:
+        merged["experience_years"] = max(0, int(merged.get("experience_years", 0)))
+    except (ValueError, TypeError):
+        merged["experience_years"] = fallback.experience_years
+
+    try:
+        merged["salary_expectation"] = max(0, int(merged.get("salary_expectation", 0)))
+    except (ValueError, TypeError):
+        merged["salary_expectation"] = fallback.salary_expectation
+
+    try:
+        merged["salary_min"] = max(0, int(merged.get("salary_min", merged.get("salary_expectation", 0))))
+    except (ValueError, TypeError):
+        merged["salary_min"] = fallback.salary_min
+
+    return UserProfile(**merged)
+
+
+def _build_profile_update_prompt(
+    current_profile: UserProfile,
+    user_message: str,
+    cv_text: Optional[str],
+    chat_history: List[Dict[str, str]],
+) -> str:
+    history_lines = []
+    for msg in chat_history[-5:]:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        history_lines.append(f"{role}: {content}")
+
+    history_text = "\n".join(history_lines) if history_lines else "No recent history."
+    profile_json = json.dumps(current_profile.model_dump(), indent=2)
+    cv_block = cv_text.strip() if cv_text else ""
+
+    return f"""Update the user profile using the latest interaction.
+
+Current User Profile (JSON):
+{profile_json}
+
+Latest User Message:
+{user_message or "No new user message."}
+
+Recent Chat History:
+{history_text}
+
+CV Text (if provided):
+{cv_block or "No CV text available."}
+
+Return ONLY valid JSON matching this schema:
+{{
+  "summary": string,
+  "skills": [string],
+  "experience_years": int,
+  "location_pref": string,
+  "salary_expectation": int,
+  "salary_min": int,
+  "company_stage_pref": [string],
+  "target_seniority": string,
+  "industries": [string]
+}}
+
+Rules:
+- Preserve existing values unless the user explicitly changes them.
+- Normalize salary_expectation and experience_years to integers.
+- Parse salary mentions like "$500k" into 500000.
+- Keep salary_min aligned with the user's stated minimum salary intent.
+- Extract company_stage_pref from explicit user intent (Seed, Series A, Series B, Series C, Growth, Public).
+- If user states a target seniority (e.g., "Junior"), set target_seniority to that even if CV indicates otherwise.
+- Keep skills and industries as string lists (dedupe if needed).
+"""
+
+
+def _format_technical_snapshot(profile: UserProfile, search_params: Dict[str, Any]) -> str:
+    skills = ", ".join(profile.skills) if profile.skills else "None"
+    industries = ", ".join(profile.industries) if profile.industries else "None"
+    location_pref = profile.location_pref or "None"
+    summary = profile.summary or "None"
+
+    company_stage_pref = ", ".join(profile.company_stage_pref) if profile.company_stage_pref else "None"
+    target_seniority = profile.target_seniority or "None"
+
+    snapshot_lines = [
+        "Technical Snapshot",
+        f"- Summary: {summary}",
+        f"- Skills: {skills}",
+        f"- Experience Years: {profile.experience_years}",
+        f"- Target Seniority: {target_seniority}",
+        f"- Location Preference: {location_pref}",
+        f"- Salary Expectation: {profile.salary_expectation}",
+        f"- Salary Min: {profile.salary_min}",
+        f"- Company Stage Preference: {company_stage_pref}",
+        f"- Industries: {industries}",
+    ]
+
+    if search_params:
+        snapshot_lines.append("- Search Filters:")
+        query = search_params.get("query")
+        if query:
+            snapshot_lines.append(f"  - Query: {query}")
+        filter_params = search_params.get("filter_params")
+        if filter_params:
+            snapshot_lines.append(f"  - Filter Params: {json.dumps(filter_params, ensure_ascii=True)}")
+        metadata_filters = search_params.get("metadata_filters")
+        if metadata_filters:
+            snapshot_lines.append(f"  - Metadata Filters: {json.dumps(metadata_filters, ensure_ascii=True)}")
+
+    return "\n".join(snapshot_lines)
+
+
+def _format_internal_feedback(feedback: Any) -> str:
+    if isinstance(feedback, str):
+        return feedback
+    if not isinstance(feedback, dict):
+        return str(feedback)
+    message = feedback.get("message") or "Job Scout reported an issue."
+    suggestions = feedback.get("suggested_changes") or []
+    if isinstance(suggestions, str):
+        suggestions = [suggestions]
+    suggestions_text = ""
+    if suggestions:
+        suggestions_text = " Suggested Snapshot changes: " + "; ".join(str(s) for s in suggestions if s)
+    return f"{message}{suggestions_text}"
+
+
+def _build_no_results_coach_message(profile: UserProfile, feedback: str) -> str:
+    criteria_parts = []
+    if profile.target_seniority:
+        criteria_parts.append(f"{profile.target_seniority} roles")
+    if profile.salary_expectation:
+        criteria_parts.append(f"a salary of ${profile.salary_expectation:,}")
+    if profile.salary_min:
+        criteria_parts.append(f"minimum salary ${profile.salary_min:,}")
+    if profile.company_stage_pref:
+        if len(profile.company_stage_pref) == 1:
+            criteria_parts.append(f"at {profile.company_stage_pref[0]} stage companies")
+        else:
+            criteria_parts.append(f"at {', '.join(profile.company_stage_pref)} stage companies")
+    if profile.industries:
+        if len(profile.industries) == 1:
+            criteria_parts.append(f"in the {profile.industries[0]} sector")
+        else:
+            criteria_parts.append(f"in the {', '.join(profile.industries)} sectors")
+    if profile.location_pref:
+        criteria_parts.append(f"in {profile.location_pref}")
+
+    if criteria_parts:
+        criteria_text = " ".join(criteria_parts)
+        opening = (
+            "I tried to find roles matching your criteria, but it looks like "
+            f"{criteria_text} is unrealistic for the current market/database."
+        )
+    else:
+        opening = (
+            "I tried to find roles matching your criteria, but the requirements "
+            "seem unrealistic for the current market/database."
+        )
+
+    suggestions = []
+    if profile.salary_expectation:
+        suggestions.append("lowering the salary expectation")
+    if profile.salary_min:
+        suggestions.append("lowering the minimum salary")
+    if profile.location_pref:
+        suggestions.append("expanding the location preference")
+    if profile.company_stage_pref:
+        suggestions.append("broadening the company stage preference")
+    if profile.industries:
+        suggestions.append("broadening the industry focus")
+    if profile.target_seniority:
+        suggestions.append("adjusting the target seniority")
+
+    if suggestions:
+        suggestion_text = "Try " + " or ".join(suggestions) + "."
+    else:
+        suggestion_text = "Try relaxing one or more filters in the Technical Snapshot."
+
+    if feedback:
+        return f"{opening}\n{feedback}\n{suggestion_text}"
+    return f"{opening}\n{suggestion_text}"
+
+
+def _build_violations_disclaimer(violations: List[Dict[str, Any]]) -> str:
+    if not violations:
+        return ""
+    filter_types = sorted({v.get("filter") for v in violations if v.get("filter")})
+    if not filter_types:
+        return "I found these matching your skills, but some criteria differ from your preferences."
+    readable = []
+    if "salary" in filter_types:
+        readable.append("salary")
+    if "company_stage" in filter_types:
+        readable.append("company stage")
+    if "location" in filter_types:
+        readable.append("location")
+    if not readable:
+        readable = [f for f in filter_types if f]
+    return (
+        "I found these matching your skills, but please note their "
+        + " and ".join(readable)
+        + " differs from your preference."
+    )
+
+
+def _build_final_summary_prompt(job_items: List[Dict[str, str]]) -> str:
+    job_lines = "\n".join(
+        f"- {item.get('title', 'Untitled')} at {item.get('company', 'Unknown')}"
+        for item in job_items
+    )
+    return f"""Summarize the matching roles for the user.
+
+Primary context (titles + companies):
+{job_lines}
+
+Rules:
+- Do NOT claim "no roles were found" if roles are listed above.
+- Provide a concise 2-4 sentence summary of what's available.
+"""
+
+
+def _collect_job_items_for_summary(state: AgentState) -> List[Dict[str, str]]:
+    items: List[Dict[str, str]] = []
+    match_results = state.get("match_results", []) or []
+    candidate_pool = state.get("candidate_pool", []) or []
+
+    for match in match_results[:10]:
+        items.append({
+            "title": match.get("vacancy_title") or "Untitled",
+            "company": match.get("company_name") or "Unknown",
+        })
+
+    if not items:
+        for vacancy in candidate_pool[:10]:
+            items.append({
+                "title": getattr(vacancy, "title", None) or "Untitled",
+                "company": getattr(vacancy, "company_name", None) or "Unknown",
+            })
+
+    return items
 
 
 def _extract_cv_text_from_messages(messages: List[BaseMessage]) -> Optional[str]:
@@ -111,113 +464,72 @@ def _convert_user_persona_to_profile(persona: Dict[str, Any]) -> UserProfile:
     Returns:
         UserProfile instance
     """
-    # Map UserPersona fields to UserProfile fields
+    # Map UserPersona fields to the new UserProfile schema.
     skills = persona.get("technical_skills", [])
     if not isinstance(skills, list):
         skills = []
-    
-    # Extract salary from salary_min and convert to string format
-    salary_expectation = None
+
+    # Extract salary from salary_min as integer
+    salary_expectation = 0
     salary_min = persona.get("salary_min")
     if salary_min is not None:
-        # Convert numeric salary_min to string format (e.g., 150000 -> "$150k")
         try:
-            salary_value = int(salary_min)
-            if salary_value >= 1000:
-                salary_expectation = f"${salary_value // 1000}k"
-            else:
-                salary_expectation = f"${salary_value}"
+            salary_expectation = max(0, int(salary_min))
         except (ValueError, TypeError):
-            # If conversion fails, try to use as string
-            salary_expectation = str(salary_min) if salary_min else None
-    
+            salary_expectation = 0
+
     # Extract location from preferred_locations (take first if multiple)
-    location = None
+    location_pref = ""
     preferred_locations = persona.get("preferred_locations", [])
-    if preferred_locations and isinstance(preferred_locations, list) and len(preferred_locations) > 0:
-        location = preferred_locations[0]
-    
-    # Extract remote preference
-    remote_preference = None
-    if persona.get("remote_only") is True:
-        remote_preference = "remote_only"
-    # Could also check chat_context for "hybrid" or "onsite" mentions
-    
-    # Extract years of experience from chat_context or other fields
-    # This is a heuristic - in real implementation, might need LLM extraction
-    years_of_experience = None
-    chat_context = persona.get("chat_context", "")
-    if chat_context:
-        # Simple heuristic: look for "X years" pattern
-        years_match = re.search(r'(\d+)\s*years?\s*(?:of\s*)?experience', chat_context, re.IGNORECASE)
-        if years_match:
-            try:
-                years_of_experience = int(years_match.group(1))
-            except ValueError:
-                pass
-    
-    # Extract visa status from chat_context or other fields
-    visa_status = None
-    if chat_context:
-        visa_lower = chat_context.lower()
-        if "us citizen" in visa_lower or "citizen" in visa_lower:
-            visa_status = "US citizen"
-        elif "h1b" in visa_lower:
-            visa_status = "H1B"
-        elif "sponsor" in visa_lower or "visa" in visa_lower:
-            visa_status = "requires_sponsorship"
-    
-    # Extract role/category/experience/industry/company_stage
-    target_role = None
-    target_roles = persona.get("target_roles", [])
-    if isinstance(target_roles, list) and target_roles:
-        target_role = target_roles[0]
-    elif isinstance(target_roles, str):
-        target_role = target_roles
+    if preferred_locations and isinstance(preferred_locations, list):
+        location_pref = preferred_locations[0] if preferred_locations else ""
+    elif isinstance(preferred_locations, str):
+        location_pref = preferred_locations
 
-    category = None
-    preferred_categories = persona.get("preferred_categories", [])
-    if isinstance(preferred_categories, list) and preferred_categories:
-        category = preferred_categories[0]
-    elif isinstance(preferred_categories, str):
-        category = preferred_categories
+    # Extract years of experience from chat_context or explicit field
+    experience_years = 0
+    explicit_years = persona.get("experience_years")
+    if explicit_years is not None:
+        try:
+            experience_years = max(0, int(explicit_years))
+        except (ValueError, TypeError):
+            experience_years = 0
+    else:
+        chat_context = persona.get("chat_context", "")
+        if chat_context:
+            years_match = re.search(r'(\d+)\s*years?\s*(?:of\s*)?experience', chat_context, re.IGNORECASE)
+            if years_match:
+                try:
+                    experience_years = max(0, int(years_match.group(1)))
+                except ValueError:
+                    experience_years = 0
 
-    experience_level = None
-    preferred_experience_levels = persona.get("preferred_experience_levels", [])
-    if isinstance(preferred_experience_levels, list) and preferred_experience_levels:
-        experience_level = preferred_experience_levels[0]
-    elif isinstance(preferred_experience_levels, str):
-        experience_level = preferred_experience_levels
+    # Extract industries list
+    industries = persona.get("preferred_industries", [])
+    if not isinstance(industries, list):
+        industries = [industries] if industries else []
 
-    industry = None
-    preferred_industries = persona.get("preferred_industries", [])
-    if isinstance(preferred_industries, list) and preferred_industries:
-        industry = preferred_industries[0]
-    elif isinstance(preferred_industries, str):
-        industry = preferred_industries
-
-    company_stage = None
-    preferred_company_stages = persona.get("preferred_company_stages", [])
-    if isinstance(preferred_company_stages, list) and preferred_company_stages:
-        company_stage = preferred_company_stages[0]
-    elif isinstance(preferred_company_stages, str):
-        company_stage = preferred_company_stages
-
-    skip_questions = bool(persona.get("skip_questions", False))
+    # Build a short summary from available context
+    summary = ""
+    if persona.get("chat_context"):
+        summary = str(persona.get("chat_context", "")).strip()
+    elif persona.get("career_goals"):
+        career_goals = persona.get("career_goals")
+        if isinstance(career_goals, list):
+            summary = ", ".join(career_goals)
+        else:
+            summary = str(career_goals)
 
     return UserProfile(
+        summary=summary,
         skills=skills,
-        years_of_experience=years_of_experience,
+        experience_years=experience_years,
+        location_pref=location_pref,
         salary_expectation=salary_expectation,
-        location=location,
-        remote_preference=remote_preference,
-        visa_status=visa_status,
-        target_role=target_role,
-        category=category,
-        experience_level=experience_level,
-        industry=industry,
-        company_stage=company_stage,
-        skip_questions=skip_questions,
+        salary_min=salary_expectation,
+        company_stage_pref=_coerce_str_list(persona.get("preferred_company_stages")),
+        target_seniority=str(persona.get("target_seniority", "")).strip(),
+        industries=industries,
     )
 
 
@@ -227,9 +539,10 @@ def _check_profile_completeness(profile: UserProfile) -> Tuple[bool, List[str]]:
     
     Required fields for search:
     - At least one skill (key tech stack)
-    - Location or remote preference
+    - Experience years
+    - Location preference
     
-    Note: Salary expectation is optional and does not block search.
+    Note: Salary expectation and industries are optional.
     
     Args:
         profile: UserProfile to check
@@ -239,26 +552,14 @@ def _check_profile_completeness(profile: UserProfile) -> Tuple[bool, List[str]]:
     """
     missing_fields = []
     
-    # Check for key tech stack (skills)
-    if not profile.skills or len(profile.skills) == 0:
-        missing_fields.append("key_tech_stack")
-    
-    # Check for role or category
-    if not profile.target_role and not profile.category:
-        missing_fields.append("role_or_category")
+    if not profile.skills:
+        missing_fields.append("skills")
 
-    # Check for experience level
-    if not profile.experience_level:
-        missing_fields.append("experience_level")
+    if profile.experience_years <= 0:
+        missing_fields.append("experience_years")
 
-    # Check for location or remote preference
-    if not profile.location and not profile.remote_preference:
-        missing_fields.append("location_or_remote_preference")
-    
-    # Industry is optional - do not block search if missing
-
-    # Salary expectation is optional - do not block search if missing
-    # Removed check for desired_salary/salary_expectation
+    if not profile.location_pref:
+        missing_fields.append("location_pref")
     
     is_complete = len(missing_fields) == 0
     return is_complete, missing_fields
@@ -277,12 +578,11 @@ def _generate_questions_for_missing_info(missing_fields: List[str]) -> List[str]
     questions = []
     
     field_to_question = {
-        "key_tech_stack": "What are your main technical skills or programming languages? (e.g., Python, React, Java)",
-        "role_or_category": "What role or job category are you targeting? (e.g., Visual Designer, Backend Engineer, Design, Engineering)",
-        "experience_level": "What experience level are you targeting? (e.g., Junior, Mid, Senior)",
-        "location_or_remote_preference": "What is your preferred work location? (e.g., San Francisco, Remote, London) or do you prefer remote work?",
-        "industry": "Do you have a preferred industry? (e.g., Bio + Health, Fintech, Enterprise) You can say 'no preference'.",
-        "desired_salary": "What is your desired annual salary range? (e.g., $120k, $150k-$200k)",
+        "skills": "What are your main technical skills or programming languages? (e.g., Python, React, Java)",
+        "experience_years": "How many years of professional experience do you have?",
+        "location_pref": "What is your preferred work location? (e.g., San Francisco, Remote, London)",
+        "industries": "Do you have preferred industries? (e.g., Bio + Health, Fintech, Enterprise) You can say 'no preference'.",
+        "salary_expectation": "What is your desired annual salary range? (e.g., 120000 or $150k-$200k)",
     }
     
     for field in missing_fields:
@@ -310,108 +610,54 @@ async def strategist_node(state: AgentState) -> AgentState:
         Updated agent state with user_profile and status
     """
     logger.info("strategist_node_started", status=state.get("status"))
+
+    internal_feedback = state.get("internal_feedback")
+    feedback_message = _format_internal_feedback(internal_feedback) if internal_feedback else ""
+    needs_no_results_coaching = state.get("status") == "no_results" and bool(internal_feedback)
+    needs_search_failure_explainer = state.get("status") in {"no_results", "needs_research"} and bool(internal_feedback)
     
     # Initialize TalentStrategistAgent
     strategist = TalentStrategistAgent()
-    
-    # Extract messages and CV text
     messages = state.get("messages", [])
-    cv_text = _extract_cv_text_from_messages(messages)
-    
-    # Get current user profile (if exists)
-    current_profile = state.get("user_profile")
-    current_persona = None
-    if current_profile:
-        # Convert UserProfile back to persona dict for compatibility
-        # Parse salary_expectation string to numeric value if needed
-        salary_min = None
-        if current_profile.salary_expectation:
-            try:
-                # Parse salary_expectation string (e.g., "$150k" -> 150000, "150000" -> 150000)
-                salary_str = current_profile.salary_expectation.replace("$", "").replace(",", "").strip()
-                if salary_str.lower().endswith("k"):
-                    salary_min = int(float(salary_str[:-1]) * 1000)
-                else:
-                    salary_min = int(float(salary_str))
-            except (ValueError, TypeError, AttributeError):
-                # If parsing fails, leave as None
-                salary_min = None
-        
-        current_persona = {
-            "technical_skills": current_profile.skills or [],
-            "salary_min": salary_min,
-            "preferred_locations": [current_profile.location] if current_profile.location else [],
-            "remote_only": current_profile.remote_preference == "remote_only",
-            "target_roles": [current_profile.target_role] if current_profile.target_role else [],
-            "preferred_categories": [current_profile.category] if current_profile.category else [],
-            "preferred_experience_levels": [current_profile.experience_level] if current_profile.experience_level else [],
-            "preferred_industries": [current_profile.industry] if current_profile.industry else [],
-            "preferred_company_stages": [current_profile.company_stage] if current_profile.company_stage else [],
-            "skip_questions": current_profile.skip_questions,
-            "chat_context": f"Experience: {current_profile.years_of_experience} years. Visa: {current_profile.visa_status}" if current_profile.years_of_experience or current_profile.visa_status else None,
-        }
-        # Remove None values
-        current_persona = {k: v for k, v in current_persona.items() if v is not None and v != []}
-    
-    # Extract latest user message (get the last HumanMessage)
-    user_message = ""
-    chat_history = []
-    for msg in messages:
-        if isinstance(msg, HumanMessage):
-            content = msg.content if hasattr(msg, "content") else str(msg)
-            if isinstance(content, str):
-                user_message = content  # Keep updating to get the last one
-                chat_history.append({"role": "user", "content": content})
-        else:
-            # Assistant messages
-            content = msg.content if hasattr(msg, "content") else str(msg)
-            if isinstance(content, str):
-                chat_history.append({"role": "assistant", "content": content})
-    
-    # If CV text is available, prepend it to user message for context
-    if cv_text:
-        if user_message:
-            user_message = f"CV/Resume Information:\n{cv_text}\n\nUser Message: {user_message}"
-        else:
-            user_message = f"CV/Resume Information:\n{cv_text}"
+    cv_text = state.get("cv_text") or _extract_cv_text_from_messages(messages)
 
-    # Detect "skip questions" intent from user message
-    skip_phrases = ["пропусти", "без уточнений", "без вопросов", "skip", "skip questions"]
-    skip_questions = False
-    if user_message:
-        message_lower = user_message.lower()
-        skip_questions = any(phrase in message_lower for phrase in skip_phrases)
-    
-    # Update persona using TalentStrategistAgent (only if we have new information)
-    if user_message or cv_text:
-        try:
-            updated_persona = await strategist.update_persona(
-                current_persona=current_persona,
-                user_message=user_message or "",
-                chat_history=chat_history[-5:] if chat_history else None,  # Last 5 messages for context
-            )
-            
-            logger.info(
-                "persona_updated",
-                persona_keys=list(updated_persona.keys()) if updated_persona else [],
-            )
-        except Exception as e:
-            logger.error("persona_update_error", error=str(e), error_type=type(e).__name__)
-            # On error, keep current persona or use empty
-            updated_persona = current_persona or {}
-    else:
-        # No new information, use existing persona
-        updated_persona = current_persona or {}
-    
-    # Convert updated persona to UserProfile
-    if skip_questions:
-        updated_persona["skip_questions"] = True
-    updated_profile = _convert_user_persona_to_profile(updated_persona)
-    
-    # Check profile completeness
+    current_profile = state.get("user_profile") or UserProfile()
+    context_prompt = get_context_prompt({**state, "user_profile": current_profile})
+    base_prompt = strategist._load_prompt(strategist.prompt_file)
+    system_prompt = f"{context_prompt}\n\n{base_prompt}"
+
+    user_message = ""
+    chat_history: List[Dict[str, str]] = []
+    for msg in messages:
+        content = msg.content if hasattr(msg, "content") else str(msg)
+        if not isinstance(content, str):
+            continue
+        if isinstance(msg, HumanMessage):
+            user_message = content
+            chat_history.append({"role": "user", "content": content})
+        else:
+            chat_history.append({"role": "assistant", "content": content})
+
+    update_prompt = _build_profile_update_prompt(
+        current_profile=current_profile,
+        user_message=user_message,
+        cv_text=cv_text,
+        chat_history=chat_history,
+    )
+
+    try:
+        response = await strategist.invoke(
+            [HumanMessage(content=update_prompt)],
+            system_prompt=system_prompt,
+            max_tokens=800,
+        )
+        response_text = response.content if hasattr(response, "content") else str(response)
+        updated_profile = _parse_user_profile_response(response_text, current_profile)
+    except Exception as e:
+        logger.error("profile_update_error", error=str(e), error_type=type(e).__name__)
+        updated_profile = current_profile
+
     is_complete, missing_fields = _check_profile_completeness(updated_profile)
-    
-    # Generate questions if needed
     missing_info = []
     missing_questions = []
     if not is_complete:
@@ -419,18 +665,27 @@ async def strategist_node(state: AgentState) -> AgentState:
         missing_questions = _generate_questions_for_missing_info(missing_fields)
         logger.info("profile_incomplete", missing_fields=missing_fields, questions=missing_questions)
 
-    if updated_profile.skip_questions:
-        missing_info = []
-        missing_questions = []
-        is_complete = True
-    
-    # Update state
+    snapshot = _format_technical_snapshot(updated_profile, state.get("search_params", {}))
+    if internal_feedback:
+        feedback_message = _format_internal_feedback(internal_feedback)
+
+    response_parts = []
+    if missing_questions:
+        response_parts.append("Questions to refine the snapshot: " + " ".join(missing_questions))
+    response_parts.append(snapshot)
+    if missing_questions:
+        response_parts.append("Questions to refine the snapshot: " + " ".join(missing_questions))
+    response_parts.append(snapshot)
+    response_text = "\n\n".join(response_parts)
+
     updated_state: AgentState = {
         **state,
         "user_profile": updated_profile,
         "missing_info": missing_info,
         "missing_questions": missing_questions,
         "status": "ready_for_search" if is_complete else "awaiting_info",
+        "messages": [AIMessage(content=response_text)],
+        "internal_feedback": None,
     }
     
     logger.info(
@@ -699,15 +954,13 @@ def _identify_strict_criteria(search_params: Dict[str, Any], results_count: int,
 
 async def job_scout_node(state: AgentState) -> AgentState:
     """
-    Job Scout node - performs job search using tool-based agent.
+    Job Scout node - performs job search using profile-only inputs.
     
     This node:
-    1. Uses JobScoutAgent with search_vacancies_tool to perform search
-    2. Agent analyzes user_profile and conversation history
-    3. Agent calls search_vacancies_tool with appropriate query and filters
-    4. Converts tool results to Vacancy objects
-    5. Checks if results are sufficient (>= 3 vacancies and min score >= 0.7)
-    6. If criteria are too strict, adds feedback to missing_info and sets status to 'awaiting_info'
+    1. Builds query and filters strictly from state.user_profile
+    2. Calls search_vacancies_tool directly (no chat context)
+    3. Converts tool results to Vacancy objects
+    4. Emits internal_feedback when 0 results are returned
     
     Args:
         state: Current agent state
@@ -716,35 +969,39 @@ async def job_scout_node(state: AgentState) -> AgentState:
         Updated agent state with candidate_pool and search_params
     """
     logger.info("job_scout_node_started", status=state.get("status"))
-    state = {**state, "missing_questions": []}
+    state["candidate_pool"] = []
+    state["match_results"] = []
+    return_data = {"candidate_pool": [], "match_results": [], "internal_feedback": ""}
+    state = {**state, **return_data, "missing_questions": []}
     
     # Check if user_profile exists
     user_profile = state.get("user_profile")
     if not user_profile:
         logger.warning("no_user_profile", setting_status="awaiting_info")
+        internal_feedback = {
+            "source": "job_scout",
+            "message": "Search skipped: user_profile is missing in state.",
+            "suggested_changes": ["Provide profile summary, skills, and location preference."],
+        }
         updated_state: AgentState = {
             **state,
             "status": "awaiting_info",
-            "missing_info": ["Please provide your profile information first."],
+            "missing_info": ["user_profile"],
             "missing_questions": [],
             "candidate_pool": [],
             "search_params": {},
+            "internal_feedback": internal_feedback,
         }
         return updated_state
     
-    # Initialize JobScoutAgent (with tool binding)
-    scout = JobScoutAgent()
-    
-    # Convert UserProfile to dict for agent
-    normalized_location = _normalize_office_only_location(user_profile.location)
-    remote_preference = user_profile.remote_preference
-    if normalized_location is None and user_profile.location:
-        # Treat "office only" style inputs as onsite preference, not location
-        remote_preference = "onsite"
-
     is_complete, missing_fields = _check_profile_completeness(user_profile)
-    if missing_fields and not user_profile.skip_questions:
+    if missing_fields:
         logger.info("job_scout_profile_incomplete", missing_fields=missing_fields)
+        internal_feedback = {
+            "source": "job_scout",
+            "message": "Search skipped: user_profile missing required fields.",
+            "suggested_changes": missing_fields,
+        }
         updated_state: AgentState = {
             **state,
             "status": "awaiting_info",
@@ -752,164 +1009,99 @@ async def job_scout_node(state: AgentState) -> AgentState:
             "missing_questions": [],
             "candidate_pool": [],
             "search_params": {},
+            "internal_feedback": internal_feedback,
         }
         return updated_state
 
-    user_profile_dict = {
-        "skills": user_profile.skills if user_profile.skills else [],
-        "years_of_experience": user_profile.years_of_experience,
-        "location": normalized_location,
-        "remote_preference": remote_preference,
-        "salary_expectation": user_profile.salary_expectation,
-        "visa_status": user_profile.visa_status,
-        "target_role": user_profile.target_role,
-        "category": user_profile.category,
-        "experience_level": user_profile.experience_level,
-        "industry": user_profile.industry,
-        "company_stage": user_profile.company_stage,
-    }
-    
-    # Get conversation history from messages
-    conversation_history = []
-    messages = state.get("messages", [])
-    
-    # Check retry limit to prevent infinite loops
-    search_params = state.get("search_params", {})
-    search_attempt = search_params.get("_search_attempt", 0)
-    research_iterations = search_params.get("_research_iterations", 0)
-    # Synchronize limits: max_search_retries should account for research iterations
-    # Total attempts = search_attempts + research_iterations
-    max_search_retries = 3  # Maximum number of search retries
-    max_total_attempts = 3  # Maximum total attempts (search + research)
-    
-    # If we've exceeded max retries, stop and return error
-    total_attempts = search_attempt + research_iterations
-    if total_attempts >= max_total_attempts or search_attempt >= max_search_retries:
-        logger.warning(
-            "max_search_retries_reached",
-            search_attempt=search_attempt,
-            research_iterations=research_iterations,
-            total_attempts=total_attempts,
-            max_retries=max_search_retries,
-            max_total_attempts=max_total_attempts,
-        )
+    query_parts = []
+    if user_profile.summary:
+        query_parts.append(user_profile.summary)
+    if user_profile.skills:
+        query_parts.append(" ".join(user_profile.skills[:8]))
+    query = " ".join(query_parts).strip()
+
+    if not query:
+        internal_feedback = {
+            "source": "job_scout",
+            "message": "Search skipped: user_profile has no summary or skills to build a query.",
+            "suggested_changes": ["Add a profile summary or skills list."],
+        }
         updated_state: AgentState = {
             **state,
             "status": "awaiting_info",
-            "missing_info": [
-                f"Search attempted {total_attempts} times (search: {search_attempt}, research: {research_iterations}) with insufficient results. "
-                "Please relax your search criteria (e.g., lower salary expectations, "
-                "expand company stages, or remove location restrictions)."
-            ],
+            "missing_info": ["summary", "skills"],
             "candidate_pool": [],
-            "search_params": search_params,
+            "search_params": {},
+            "internal_feedback": internal_feedback,
         }
         return updated_state
-    
-    # Check if the last message is a ToolMessage with count: 0
-    # This indicates a previous search returned 0 results
-    last_message = messages[-1] if messages else None
-    needs_filter_relaxation = False
-    
-    if last_message:
-        # Check if it's a ToolMessage (from langchain_core.messages)
-        from langchain_core.messages import ToolMessage
-        if isinstance(last_message, ToolMessage):
-            try:
-                # Parse the tool result to check count
-                tool_content = last_message.content
-                if isinstance(tool_content, str):
-                    tool_result = json.loads(tool_content)
-                    result_count = tool_result.get("count", -1)
-                    if result_count == 0:
-                        needs_filter_relaxation = True
-                        logger.info(
-                            "detected_zero_results_toolmessage",
-                            tool_result=tool_result,
-                            search_attempt=search_attempt,
-                        )
-            except (json.JSONDecodeError, KeyError, AttributeError) as e:
-                logger.debug("could_not_parse_toolmessage", error=str(e))
-    
-    # Build conversation history
-    for msg in messages:
-        if hasattr(msg, "content"):
-            conversation_history.append({
-                "role": "user" if hasattr(msg, "type") and msg.type == "human" else "assistant",
-                "content": msg.content,
-            })
-    
-    # If we detected 0 results, explicitly tell the LLM to relax filters
-    if needs_filter_relaxation:
-        relaxation_instruction = (
-            f"IMPORTANT: The previous search returned 0 results (attempt {search_attempt + 1}/{max_search_retries}). "
-            "You MUST relax filters and try again. "
-            "Remove or expand the most restrictive filters (usually salary_min, company_stage, or exact category). "
-            "Perform a new search with relaxed criteria."
-        )
-        conversation_history.append({
-            "role": "assistant",
-            "content": relaxation_instruction,
-        })
-        logger.info(
-            "added_filter_relaxation_instruction",
-            search_attempt=search_attempt,
-            max_retries=max_search_retries,
-        )
-    
-    # Use the new tool-based search method
-    try:
-        search_result = await scout.search_with_tool(
-            user_profile=user_profile_dict,
-            conversation_history=conversation_history,
-        )
-        
-        # Extract search results and parameters
-        search_results_raw = search_result.get("search_results", [])
-        search_params = search_result.get("search_params", {})
-        analysis = search_result.get("analysis", "")
-        search_error = search_result.get("error")
-        
-        # Ensure search_params contains actual filters used in tool call
-        # This provides transparency for debugging and validation
-        if not search_params:
-            search_params = {}
-        
-        # Add metadata about the search attempt
-        # Use the search_attempt from state (already incremented if this is a retry)
-        search_params["_search_attempt"] = search_attempt + 1
-        if needs_filter_relaxation:
-            search_params["_filters_relaxed"] = True
 
-        if search_error and not search_results_raw:
-            logger.warning(
-                "tool_based_search_error",
-                error=search_error,
-                search_params=search_params,
-            )
-            updated_state: AgentState = {
+    location = user_profile.location_pref or None
+    industries = ", ".join(user_profile.industries) if user_profile.industries else None
+    salary_min = user_profile.salary_min if user_profile.salary_min > 0 else None
+    company_stage = _coerce_str_list(user_profile.company_stage_pref)
+    if not company_stage:
+        company_stage = None
+    filter_params = {
+        "location": location,
+        "industry": industries,
+        "salary_min": salary_min,
+        "company_stage": company_stage,
+    }
+    filter_params = {k: v for k, v in filter_params.items() if v}
+    current_search_params = {
+        "query": query,
+        "filter_params": filter_params,
+    }
+    state["search_params"] = current_search_params
+
+    try:
+        tool_result = search_vacancies_tool.invoke({
+            "query": query,
+            "location": location,
+            "industry": industries,
+            "salary_min": salary_min,
+            "company_stage": company_stage,
+            "top_k": 50,
+        })
+
+        search_results_raw = tool_result.get("results", [])
+        results_count = tool_result.get("count", 0)
+        search_error = tool_result.get("error")
+        current_search_params = {
+            **current_search_params,
+            "filter_params": filter_params,
+            "metadata_filters": tool_result.get("filters_applied"),
+        }
+        state["search_params"] = current_search_params
+
+        if results_count == 0:
+            filters = []
+            if company_stage:
+                filters.append(f"company_stage in {', '.join(company_stage)}")
+            if salary_min:
+                filters.append(f"salary > {salary_min}")
+            if location:
+                filters.append(f"location in {location}")
+            if industries:
+                filters.append(f"industry in {industries}")
+
+            if filters:
+                feedback = "No jobs found for " + " and ".join(filters) + "."
+            else:
+                feedback = f"No jobs found for query '{query}'."
+
+            return {
                 **state,
-                "status": "awaiting_info",
-                "missing_info": [
-                    f"Search failed due to a system error: {search_error}. Please try again."
-                ],
-                "candidate_pool": [],
-                "search_params": search_params,
+                "status": "no_results",
+                "internal_feedback": feedback,
+                "search_params": current_search_params,
             }
-            return updated_state
-        if search_error and search_results_raw:
-            logger.warning(
-                "tool_based_search_partial_error",
-                error=search_error,
-                results_count=len(search_results_raw),
-                search_params=search_params,
-            )
-        
+
         logger.info(
             "tool_based_search_completed",
             results_count_before_conversion=len(search_results_raw),
-            has_analysis=bool(analysis),
-            search_params=search_params,
+            search_params=current_search_params,
             raw_results_sample=[
                 {
                     "id": r.get("id", "unknown"),
@@ -922,14 +1114,12 @@ async def job_scout_node(state: AgentState) -> AgentState:
         
         # Convert raw results to Vacancy objects
         vacancies = []
-        scores = []
         conversion_failures = []
         for result in search_results_raw:
             metadata = result.get("metadata", {})
             vacancy = _metadata_to_vacancy(metadata)
             if vacancy:
                 vacancies.append(vacancy)
-                scores.append(result.get("score", 0.0))
             else:
                 # Log conversion failures for debugging
                 conversion_failures.append({
@@ -945,100 +1135,20 @@ async def job_scout_node(state: AgentState) -> AgentState:
                 failures_count=len(conversion_failures),
                 failures=conversion_failures[:10],  # Log first 10 failures
             )
-        
-        # Check if results are sufficient
-        min_score = min(scores) if scores else 0.0
-        results_count = len(vacancies)
-        
-        logger.info(
-            "search_results_analyzed",
-            results_count=results_count,
-            results_count_before_conversion=len(search_results_raw),
-            conversion_failures=len(conversion_failures),
-            min_score=min_score,
-            max_score=max(scores) if scores else 0.0,
-            avg_score=sum(scores) / len(scores) if scores else 0.0,
-        )
-        
-        # Check if criteria are too strict
-        # Lowered min_score threshold from 0.7 to 0.3 for testing
-        # Only check min_score if we have results (results_count > 0)
-        # If we have at least 1 result with good score (>= 0.3), accept it
-        min_score_threshold = 0.3
-        if results_count == 0 or (results_count > 0 and min_score < min_score_threshold):
-            # Check if we've hit the retry limit
-            if search_params["_search_attempt"] >= max_search_retries:
-                logger.warning(
-                    "max_search_retries_reached_after_search",
-                    search_attempt=search_params["_search_attempt"],
-                    results_count=results_count,
-                )
-                feedback_messages = [
-                    f"Search returned {results_count} result(s) after {search_params['_search_attempt']} attempts. "
-                    "Please relax your search criteria (e.g., lower salary expectations, "
-                    "expand company stages, or remove location restrictions)."
-                ]
-                updated_state: AgentState = {
-                    **state,
-                    "status": "awaiting_info",
-                    "missing_info": feedback_messages,
-                    "candidate_pool": vacancies,
-                    "search_params": search_params,
-                }
-                return updated_state
-            
-            # Extract feedback from agent's analysis or generate our own
-            feedback_messages = []
-            if results_count == 0:
-                feedback_messages.append(
-                    f"Search returned 0 results. Please relax filters. "
-                    f"(Attempt {search_params['_search_attempt']}/{max_search_retries})"
-                )
-            elif results_count > 0 and min_score < min_score_threshold:
-                feedback_messages.append(
-                    f"Found {results_count} vacancy(ies), but similarity scores are too low (min: {min_score:.2f}). "
-                    f"Consider adjusting search query. (Attempt {search_params['_search_attempt']}/{max_search_retries})"
-                )
-            # Only check min_score if we have results (to avoid false positives when filters are too strict)
-            if results_count > 0 and min_score < min_score_threshold:
-                feedback_messages.append(f"Similarity scores are low (min: {min_score:.2f}). Consider adjusting search query.")
-            
-            # Add agent's analysis if available
-            if analysis and ("relax" in analysis.lower() or "filter" in analysis.lower()):
-                feedback_messages.append(f"Agent suggestion: {analysis[:200]}")
-            
-            logger.info(
-                "criteria_too_strict",
-                feedback=feedback_messages,
-                search_attempt=search_params["_search_attempt"],
-                max_retries=max_search_retries,
-            )
-            
-            # Return to strategist_node by setting status to 'awaiting_info'
-            # The graph will handle retries through the flow back to job_scout_node
-            updated_state: AgentState = {
-                **state,
-                "status": "awaiting_info",
-                "missing_info": feedback_messages,
-                "candidate_pool": vacancies,
-                "search_params": search_params,
-            }
-            return updated_state
-        
-        # Results are sufficient
+
         updated_state: AgentState = {
             **state,
             "status": "search_complete",
             "candidate_pool": vacancies,
-            "search_params": search_params,
+            "search_params": current_search_params,
             "missing_info": [],
+            "internal_feedback": None,
         }
         
         logger.info(
             "job_scout_node_completed",
             status=updated_state["status"],
             vacancies_count=len(vacancies),
-            min_score=min_score,
         )
         
         return updated_state
@@ -1049,12 +1159,18 @@ async def job_scout_node(state: AgentState) -> AgentState:
             error=str(e),
             error_type=type(e).__name__,
         )
+        internal_feedback = {
+            "source": "job_scout",
+            "message": f"Search failed: {str(e)}",
+            "suggested_changes": ["Try reducing filters or retry the search later."],
+        }
         updated_state: AgentState = {
             **state,
-            "status": "error",
-            "missing_info": [f"Search failed: {str(e)}"],
+            "status": "awaiting_info",
+            "missing_info": ["search_error"],
             "candidate_pool": [],
-            "search_params": {},
+            "search_params": current_search_params,
+            "internal_feedback": internal_feedback,
         }
         return updated_state
 
@@ -1242,6 +1358,7 @@ async def _analyze_vacancy_match(
     matchmaker: MatchmakerAgent,
     vacancy: Vacancy,
     user_profile: UserProfile,
+    context_prompt: str,
     similarity_score: Optional[float] = None
 ) -> Dict[str, Any]:
     """
@@ -1274,22 +1391,14 @@ async def _analyze_vacancy_match(
     persona_dict = {
         "technical_skills": user_profile.skills or [],
         "salary_min": salary_min,
-        "preferred_locations": [user_profile.location] if user_profile.location else [],
-        "remote_only": user_profile.remote_preference == "remote_only",
-        "target_role": user_profile.target_role,
-        "category": user_profile.category,
-        "experience_level": user_profile.experience_level,
-        "industry": user_profile.industry,
-        "company_stage": user_profile.company_stage,
-        "location": user_profile.location,
-        "remote_preference": user_profile.remote_preference,
+        "preferred_locations": [user_profile.location_pref] if user_profile.location_pref else [],
+        "location": user_profile.location_pref,
+        "industries": user_profile.industries or [],
+        "summary": user_profile.summary,
     }
-    
-    if user_profile.years_of_experience:
-        persona_dict["experience_years"] = user_profile.years_of_experience
-    
-    if user_profile.visa_status:
-        persona_dict["chat_context"] = f"Visa status: {user_profile.visa_status}"
+
+    if user_profile.experience_years:
+        persona_dict["experience_years"] = user_profile.experience_years
     
     # Build vacancy context from extracted and blocks
     vacancy_parts = []
@@ -1410,19 +1519,21 @@ Company Details:
 Evidence Quotes:
 {chr(10).join(company_evidence_quotes) if company_evidence_quotes else 'None'}"""
 
+    role_system_prompt = f"{context_prompt}\n\n{role_prompt}"
     role_match = await matchmaker.analyze_match(
         vacancy_text=role_context,
         candidate_persona=persona_dict,
         similarity_score=similarity_score,
-        system_prompt=role_prompt,
+        system_prompt=role_system_prompt,
         score_max=10,
     )
 
+    company_system_prompt = f"{context_prompt}\n\n{company_prompt}"
     company_match = await matchmaker.analyze_match(
         vacancy_text=company_context,
         candidate_persona=persona_dict,
         similarity_score=similarity_score,
-        system_prompt=company_prompt,
+        system_prompt=company_system_prompt,
         score_max=10,
     )
     
@@ -1457,7 +1568,7 @@ Evidence Quotes:
             matching_skills = [s for s in user_profile.skills if any(s.lower() in req.lower() or req.lower() in s.lower() for req in (role.must_skills or []))]
             if matching_skills:
                 user_skills_match = matching_skills
-        
+
         role_score = role_match.get("score", 0)
         # Score already in 0-10 scale
         role_score_10 = role_score
@@ -1466,9 +1577,9 @@ Evidence Quotes:
         
         if user_skills_match:
             role_summary += f"Candidate has {', '.join(user_skills_match[:3])} skills"
-            if user_profile.years_of_experience and role.experience_years_min:
-                if user_profile.years_of_experience >= role.experience_years_min:
-                    role_summary += f", {user_profile.years_of_experience} years experience (meets {role.experience_years_min}+ requirement)"
+            if user_profile.experience_years and role.experience_years_min:
+                if user_profile.experience_years >= role.experience_years_min:
+                    role_summary += f", {user_profile.experience_years} years experience (meets {role.experience_years_min}+ requirement)"
         elif user_profile.skills:
             role_summary += f"Candidate has {', '.join(user_profile.skills[:3])} skills"
         else:
@@ -1607,6 +1718,7 @@ async def matchmaker_node(state: AgentState) -> AgentState:
     
     # Initialize MatchmakerAgent (single instance for all analyses)
     matchmaker = MatchmakerAgent()
+    context_prompt = get_context_prompt(state)
     
     # Create tasks for parallel analysis
     async def analyze_single_vacancy(vacancy: Vacancy) -> Dict[str, Any]:
@@ -1620,6 +1732,7 @@ async def matchmaker_node(state: AgentState) -> AgentState:
                 matchmaker=matchmaker,
                 vacancy=vacancy,
                 user_profile=user_profile,
+                context_prompt=context_prompt,
                 similarity_score=similarity_score
             )
             
@@ -1767,25 +1880,9 @@ async def validator_node(state: AgentState) -> AgentState:
     hard_filters = {}
     violations = []
     
-    # Check remote preference
-    if user_profile.remote_preference == "remote_only":
-        hard_filters["remote_only"] = True
-        # Check if any vacancy in results is not remote
-        for i, result in enumerate(match_results):
-            vacancy_id = result.get("vacancy_id")
-            # Find corresponding vacancy in candidate_pool
-            vacancy = next((v for v in candidate_pool if (getattr(v, 'id', None) or v.description_url) == vacancy_id), None)
-            if vacancy and not vacancy.remote_option:
-                violations.append({
-                    "vacancy_id": vacancy_id,
-                    "vacancy_title": result.get("vacancy_title", "Unknown"),
-                    "filter": "remote_only",
-                    "issue": f"Vacancy is not remote, but user requires remote_only"
-                })
-    
     # Check location preference
-    normalized_location = _normalize_office_only_location(user_profile.location)
-    if normalized_location and user_profile.remote_preference != "remote_only":
+    normalized_location = _normalize_office_only_location(user_profile.location_pref)
+    if normalized_location:
         hard_filters["location"] = normalized_location
         # Check if any vacancy doesn't match location
         location_lower = normalized_location.lower()
@@ -1802,35 +1899,25 @@ async def validator_node(state: AgentState) -> AgentState:
                             "vacancy_id": vacancy_id,
                             "vacancy_title": result.get("vacancy_title", "Unknown"),
                             "filter": "location",
-                            "issue": f"Vacancy location '{vacancy.location}' doesn't match required '{user_profile.location}'"
+                            "issue": f"Vacancy location '{vacancy.location}' doesn't match required '{user_profile.location_pref}'"
                         })
     
     # Check salary requirement
     if user_profile.salary_expectation:
-        # Parse salary_expectation to numeric value for comparison
-        try:
-            salary_str = user_profile.salary_expectation.replace("$", "").replace(",", "").strip()
-            if salary_str.lower().endswith("k"):
-                required_salary = int(float(salary_str[:-1]) * 1000)
-            else:
-                required_salary = int(float(salary_str))
-            
-            hard_filters["min_salary"] = required_salary
-            for i, result in enumerate(match_results):
-                vacancy_id = result.get("vacancy_id")
-                vacancy = next((v for v in candidate_pool if (getattr(v, 'id', None) or v.description_url) == vacancy_id), None)
-                if vacancy:
-                    vacancy_min_salary = vacancy.min_salary
-                    if vacancy_min_salary and vacancy_min_salary < required_salary:
-                        violations.append({
-                            "vacancy_id": vacancy_id,
-                            "vacancy_title": result.get("vacancy_title", "Unknown"),
-                            "filter": "salary",
-                            "issue": f"Vacancy min salary ${vacancy_min_salary:,} is below required ${required_salary:,}"
-                        })
-        except (ValueError, TypeError, AttributeError) as e:
-            logger.warning("salary_expectation_parse_failed_in_validator", salary_expectation=user_profile.salary_expectation, error=str(e))
-            # If parsing fails, skip salary validation
+        required_salary = user_profile.salary_expectation
+        hard_filters["min_salary"] = required_salary
+        for i, result in enumerate(match_results):
+            vacancy_id = result.get("vacancy_id")
+            vacancy = next((v for v in candidate_pool if (getattr(v, 'id', None) or v.description_url) == vacancy_id), None)
+            if vacancy:
+                vacancy_min_salary = vacancy.min_salary
+                if vacancy_min_salary and vacancy_min_salary < required_salary:
+                    violations.append({
+                        "vacancy_id": vacancy_id,
+                        "vacancy_title": result.get("vacancy_title", "Unknown"),
+                        "filter": "salary",
+                        "issue": f"Vacancy min salary ${vacancy_min_salary:,} is below required ${required_salary:,}"
+                    })
     
     # Use TalentStrategistAgent to analyze violations and suggest corrections
     # Only proceed if we have violations AND candidate_pool is not empty
@@ -1872,12 +1959,11 @@ async def validator_node(state: AgentState) -> AgentState:
             violation_summary += f"- {v['vacancy_title']}: {v['issue']}\n"
         
         # Create audit prompt
-        salary_str = user_profile.salary_expectation if user_profile.salary_expectation else "None"
+        salary_str = str(user_profile.salary_expectation) if user_profile.salary_expectation else "None"
         audit_prompt = f"""AUDIT MODE: Review search results for compliance with hard user filters.
 
 User Hard Filters:
-- Remote preference: {user_profile.remote_preference or 'None'}
-- Location: {user_profile.location or 'None'}
+- Location: {user_profile.location_pref or 'None'}
 - Min salary: {salary_str}
 
 Violations Found:
@@ -1917,6 +2003,14 @@ Return JSON with:
                         search_params["metadata_filters"] = adjusted_filters["metadata_filters"]
                     
                     logger.info("search_params_adjusted", adjustments=adjusted_filters)
+
+                # Enforce user intent for company stage and salary after adjustments
+                if user_profile.company_stage_pref:
+                    search_params.setdefault("filter_params", {})
+                    search_params["filter_params"]["company_stage"] = user_profile.company_stage_pref
+                if user_profile.salary_min:
+                    search_params.setdefault("filter_params", {})
+                    search_params["filter_params"]["salary_min"] = user_profile.salary_min
             except (json.JSONDecodeError, KeyError) as e:
                 logger.warning("audit_response_parse_failed", error=str(e))
                 # Fallback: manually adjust filters based on violations
@@ -1924,9 +2018,15 @@ Return JSON with:
                     search_params["filter_params"] = {}
                 
                 # Explicitly add location to search_params if location violations found
-                if "location" in violations_by_filter and user_profile.location:
-                    search_params["filter_params"]["location"] = user_profile.location
-                    logger.info("location_filter_added_to_search_params", location=user_profile.location)
+                if "location" in violations_by_filter and user_profile.location_pref:
+                    search_params["filter_params"]["location"] = user_profile.location_pref
+                    logger.info("location_filter_added_to_search_params", location=user_profile.location_pref)
+
+                if user_profile.company_stage_pref:
+                    search_params["filter_params"]["company_stage"] = user_profile.company_stage_pref
+
+                if user_profile.salary_min:
+                    search_params["filter_params"]["salary_min"] = user_profile.salary_min
                 
                 if "remote_only" in hard_filters:
                     search_params["filter_params"]["is_remote"] = True
@@ -1938,18 +2038,32 @@ Return JSON with:
         except Exception as e:
             logger.error("audit_analysis_error", error=str(e), error_type=type(e).__name__)
             # Fallback: explicitly add location if location violations found
-            if "location" in violations_by_filter and user_profile.location:
+            if "location" in violations_by_filter and user_profile.location_pref:
                 if "filter_params" not in search_params:
                     search_params["filter_params"] = {}
-                search_params["filter_params"]["location"] = user_profile.location
-                logger.info("location_filter_added_to_search_params_fallback", location=user_profile.location)
+                search_params["filter_params"]["location"] = user_profile.location_pref
+                logger.info("location_filter_added_to_search_params_fallback", location=user_profile.location_pref)
+
+            if user_profile.company_stage_pref:
+                search_params.setdefault("filter_params", {})
+                search_params["filter_params"]["company_stage"] = user_profile.company_stage_pref
+
+            if user_profile.salary_min:
+                search_params.setdefault("filter_params", {})
+                search_params["filter_params"]["salary_min"] = user_profile.salary_min
         
         # Set status to indicate need for re-search
         updated_state: AgentState = {
             **state,
             "status": "needs_research",
             "search_params": search_params,
-            "missing_info": [f"Found {len(violations)} violations. Adjusted search parameters for re-search."],
+            "violations": violations,
+            "internal_feedback": {
+                "source": "validator",
+                "message": f"Found {len(violations)} violations of hard filters.",
+                "details": violations[:10],
+            },
+            "missing_info": [],
         }
         
         logger.info("validator_node_completed_with_violations", violations_count=len(violations))
@@ -1960,6 +2074,7 @@ Return JSON with:
     updated_state: AgentState = {
         **state,
         "status": "validation_complete",
+        "violations": [],
     }
     return updated_state
 
@@ -1975,19 +2090,39 @@ def final_validation_node(state: AgentState) -> AgentState:
     missing_questions = state.get("missing_questions", []) or []
 
     if missing_questions or missing_info:
-        summary_list = missing_questions if missing_questions else missing_info
-        summary = "Missing info: " + ", ".join(summary_list)
         return {
             **state,
-            "messages": [AIMessage(content=summary)],
         }
 
     if not match_results:
-        summary = "No matching vacancies found."
+        search_failed_reason = state.get("search_failed_reason")
+        if not search_failed_reason:
+            search_params = state.get("search_params", {}) or {}
+            filter_params = search_params.get("filter_params", {}) or {}
+            search_failed_reason = (
+                "No results for filters: "
+                + json.dumps(filter_params, ensure_ascii=True)
+            )
+        coach_message = (
+            "I searched using your filters but found 0 results. "
+            f"{search_failed_reason}"
+        )
         return {
             **state,
-            "messages": [AIMessage(content=summary)],
+            "status": "no_results",
+            "search_failed_reason": search_failed_reason,
+            "internal_feedback": search_failed_reason,
+            "messages": [AIMessage(content=coach_message)],
         }
+
+    violations = state.get("violations") or []
+    violations_by_id: Dict[str, List[str]] = {}
+    for v in violations:
+        vacancy_id = v.get("vacancy_id")
+        filter_name = v.get("filter")
+        if not vacancy_id or not filter_name:
+            continue
+        violations_by_id.setdefault(vacancy_id, []).append(filter_name)
 
     # Build quick lookup for vacancy details (title, url, location)
     vacancy_by_id = {}
@@ -1999,45 +2134,59 @@ def final_validation_node(state: AgentState) -> AgentState:
         if description_url:
             vacancy_by_id[description_url] = vacancy
 
-    sorted_matches = sorted(
-        match_results,
-        key=lambda item: item.get("overall_score", 0),
-        reverse=True,
-    )
+    lines = []
+    if match_results:
+        sorted_matches = sorted(
+            match_results,
+            key=lambda item: item.get("overall_score", 0),
+            reverse=True,
+        )
 
-    lines = [f"Found {len(sorted_matches)} matching vacancy(ies):"]
-    for idx, match in enumerate(sorted_matches[:5], start=1):
-        vacancy_id = match.get("vacancy_id")
-        vacancy = vacancy_by_id.get(vacancy_id)
-        title = match.get("vacancy_title") or (getattr(vacancy, "title", None) if vacancy else None) or "Untitled"
-        company = match.get("company_name") or (getattr(vacancy, "company_name", None) if vacancy else None) or "Unknown company"
-        location = getattr(vacancy, "location", None) if vacancy else None
-        url = getattr(vacancy, "description_url", None) if vacancy else None
-        overall_score = match.get("overall_score", 0)
-        role_score = match.get("role_score", 0)
-        company_score = match.get("company_score", 0)
-        role_summary = match.get("role_match_summary") or ""
-        company_summary = match.get("company_match_summary") or ""
-        role_evidence = match.get("role_evidence") or []
-        company_evidence = match.get("company_evidence") or []
+        lines.append(f"I found {len(sorted_matches)} matching vacancies:")
+        for idx, match in enumerate(sorted_matches[:5], start=1):
+            vacancy_id = match.get("vacancy_id")
+            vacancy = vacancy_by_id.get(vacancy_id)
+            title = match.get("vacancy_title") or (getattr(vacancy, "title", None) if vacancy else None) or "Untitled"
+            company = match.get("company_name") or (getattr(vacancy, "company_name", None) if vacancy else None) or "Unknown company"
+            location = getattr(vacancy, "location", None) if vacancy else None
+            url = getattr(vacancy, "description_url", None) if vacancy else None
+            overall_score = match.get("overall_score", 0)
+            role_score = match.get("role_score", 0)
+            company_score = match.get("company_score", 0)
+            role_summary = match.get("role_match_summary") or ""
+            company_summary = match.get("company_match_summary") or ""
+            role_evidence = match.get("role_evidence") or []
+            company_evidence = match.get("company_evidence") or []
 
-        line_parts = [
-            f"{idx}. {title} — {company} (overall: {overall_score}, role: {role_score}/10, company: {company_score}/10)"
-        ]
-        if location:
-            line_parts.append(f"Location: {location}")
-        if url:
-            line_parts.append(f"URL: {url}")
-        lines.append(" | ".join(line_parts))
-        if role_summary:
-            lines.append(f"Role summary: {role_summary}")
-        if role_evidence:
-            lines.append(f"Role evidence: {', '.join(role_evidence[:2])}")
-        if company_summary:
-            lines.append(f"Company summary: {company_summary}")
-        if company_evidence:
-            lines.append(f"Company evidence: {', '.join(company_evidence[:2])}")
-        lines.append("")
+            line_parts = [
+                f"{idx}. {title} — {company} (overall: {overall_score}, role: {role_score}/10, company: {company_score}/10)"
+            ]
+            if location:
+                line_parts.append(f"Location: {location}")
+            if url:
+                line_parts.append(f"URL: {url}")
+            lines.append(" | ".join(line_parts))
+            if role_summary:
+                lines.append(f"Role summary: {role_summary}")
+            if role_evidence:
+                lines.append(f"Role evidence: {', '.join(role_evidence[:2])}")
+            if company_summary:
+                lines.append(f"Company summary: {company_summary}")
+            if company_evidence:
+                lines.append(f"Company evidence: {', '.join(company_evidence[:2])}")
+
+            if vacancy_id in violations_by_id:
+                filters = violations_by_id.get(vacancy_id, [])
+                readable = []
+                if "salary" in filters:
+                    readable.append("salary")
+                if "company_stage" in filters:
+                    readable.append("stage")
+                label = "/".join(readable) if readable else "salary/stage"
+                lines.append(f"Note: This role's {label} differs from your current preference.")
+            lines.append("")
+    else:
+        lines.append("I found 0 matching vacancies.")
 
     summary = "\n".join(lines)
     return {

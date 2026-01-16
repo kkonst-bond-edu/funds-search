@@ -187,7 +187,8 @@ class TalentStrategistAgent(BaseAgent):
         self,
         current_persona: Optional[Dict[str, Any]],
         user_message: str,
-        chat_history: Optional[List[Dict[str, Any]]] = None
+        chat_history: Optional[List[Dict[str, Any]]] = None,
+        system_prompt: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Update user persona by analyzing the latest message and merging with existing persona.
@@ -250,7 +251,7 @@ Latest User Message:
             messages = [HumanMessage(content=analysis_prompt)]
             
             # Invoke the LLM with a reasonable token limit for structured output
-            response = await self.invoke(messages, max_tokens=1000)
+            response = await self.invoke(messages, system_prompt=system_prompt, max_tokens=1000)
             response_text = response.content if hasattr(response, "content") else str(response)
             
             logger.debug("persona_update_response_received", response_length=len(response_text))

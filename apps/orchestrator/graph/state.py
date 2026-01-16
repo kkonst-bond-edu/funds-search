@@ -4,7 +4,7 @@ State definitions for LangGraph multi-agent orchestration system.
 This module defines the state schema used by LangGraph to manage
 the flow of information between specialized agents.
 """
-from typing import Annotated, List, Dict, Optional
+from typing import Annotated, List, Dict, Optional, Any
 import sys
 # Use typing_extensions.TypedDict for Python < 3.12 compatibility
 if sys.version_info >= (3, 12):
@@ -24,72 +24,59 @@ class UserProfile(BaseModel):
     This model captures all relevant information about a job candidate
     to enable effective matching with job vacancies.
     """
+    summary: str = Field(
+        "",
+        description="Short summary of the candidate profile"
+    )
     skills: List[str] = Field(
         default_factory=list,
         description="List of technical and professional skills"
     )
-    years_of_experience: Optional[int] = Field(
-        None,
+    experience_years: int = Field(
+        0,
         ge=0,
         description="Total years of professional experience"
     )
-    salary_expectation: Optional[str] = Field(
-        None,
-        description="Optional: do not block search if this is missing. Salary expectation (e.g., '$150k', '$120k-$180k', '150000')"
-    )
-    location: Optional[str] = Field(
-        None,
+    location_pref: str = Field(
+        "",
         description="Preferred job location (e.g., 'San Francisco', 'Remote', 'London')"
     )
-    remote_preference: Optional[str] = Field(
-        None,
-        description="Remote work preference: 'remote_only', 'hybrid', 'onsite', or None"
+    salary_expectation: int = Field(
+        0,
+        ge=0,
+        description="Salary expectation as an integer"
     )
-    visa_status: Optional[str] = Field(
-        None,
-        description="Visa or work authorization status (e.g., 'US citizen', 'H1B', 'requires_sponsorship')"
+    salary_min: int = Field(
+        0,
+        ge=0,
+        description="Minimum salary filter as an integer"
     )
-    target_role: Optional[str] = Field(
-        None,
-        description="Target role or job title (e.g., 'Visual Designer', 'Backend Engineer')"
+    company_stage_pref: List[str] = Field(
+        default_factory=list,
+        description="Preferred company stages (e.g., 'Seed', 'Series A', 'Growth')"
     )
-    category: Optional[str] = Field(
-        None,
-        description="Preferred job category (e.g., 'Design', 'Engineering')"
+    target_seniority: str = Field(
+        "",
+        description="Target seniority preference (e.g., 'Junior', 'Mid', 'Senior')"
     )
-    experience_level: Optional[str] = Field(
-        None,
-        description="Preferred experience level (e.g., 'Junior', 'Mid', 'Senior')"
-    )
-    industry: Optional[str] = Field(
-        None,
-        description="Preferred industry (e.g., 'Bio + Health', 'Fintech')"
-    )
-    company_stage: Optional[str] = Field(
-        None,
-        description="Preferred company stage (e.g., 'Seed', 'Series A', 'Growth')"
-    )
-    skip_questions: bool = Field(
-        False,
-        description="Whether the user chose to skip clarifying questions"
+    industries: List[str] = Field(
+        default_factory=list,
+        description="Preferred industries (e.g., 'Bio + Health', 'Fintech')"
     )
 
     class Config:
         """Pydantic configuration."""
         json_schema_extra = {
             "example": {
+                "summary": "Backend engineer with platform focus.",
                 "skills": ["Python", "FastAPI", "PostgreSQL", "Docker"],
-                "years_of_experience": 5,
-                "salary_expectation": "$150k",
-                "location": "San Francisco",
-                "remote_preference": "hybrid",
-                "visa_status": "US citizen",
-                "target_role": "Backend Engineer",
-                "category": "Engineering",
-                "experience_level": "Mid",
-                "industry": "Enterprise",
-                "company_stage": "Growth",
-                "skip_questions": False
+                "experience_years": 5,
+                "location_pref": "San Francisco",
+                "salary_expectation": 150000,
+                "salary_min": 150000,
+                "company_stage_pref": ["Series A", "Growth"],
+                "target_seniority": "Mid",
+                "industries": ["Enterprise", "Fintech"]
             }
         }
 
@@ -105,8 +92,14 @@ class AgentState(TypedDict):
     messages: Annotated[List[AnyMessage], add_messages]
     """Chat message history. New messages are automatically appended."""
     
-    user_profile: Optional[UserProfile]
+    user_profile: UserProfile
     """User profile containing candidate information (skills, experience, preferences)."""
+
+    cv_text: Optional[str]
+    """Editable CV content attached by the user."""
+
+    is_cv_attached: bool
+    """Whether the user has attached a CV in the UI."""
     
     candidate_pool: List[Vacancy]
     """List of candidate vacancies retrieved from the search."""
@@ -125,3 +118,12 @@ class AgentState(TypedDict):
 
     missing_questions: List[str]
     """Human-readable questions generated by the strategist for missing fields."""
+
+    internal_feedback: Optional[Dict[str, Any]]
+    """Internal feedback from agents (e.g., JobScout errors or suggestions)."""
+
+    violations: Optional[List[Dict[str, Any]]]
+    """Validation violations for strategist explanations."""
+
+    search_failed_reason: Optional[str]
+    """Reason for search failures (e.g., filters used with 0 results)."""
