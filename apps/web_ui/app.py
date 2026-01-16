@@ -1405,7 +1405,16 @@ with tab_chat:
 
             except httpx.HTTPStatusError as e:
                 status.update(label="❌ API Error", state="error")
-                error_detail = e.response.text[:200] if e.response.text else "Unknown error"
+                error_detail = "Unknown error"
+                try:
+                    error_detail = e.response.text[:200] if e.response.text else "Unknown error"
+                except httpx.ResponseNotRead:
+                    try:
+                        response_bytes = e.response.read()
+                        response_text = response_bytes.decode(errors="ignore") if response_bytes else ""
+                        error_detail = response_text[:200] if response_text else "Unknown error"
+                    except Exception:
+                        error_detail = "Unknown error"
                 error_message = "Sorry, an error occurred while searching for vacancies. Please try again."
                 if e.response.status_code == 422:
                     error_message = "Could not understand your query. Please try describing the role, skills, or industry in more detail."
