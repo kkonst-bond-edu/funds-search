@@ -50,81 +50,52 @@ The entire workflow operates on a shared `AgentState` that flows through all nod
 ```python
 class AgentState(TypedDict):
     messages: Annotated[List[AnyMessage], add_messages]  # Chat history
-    user_profile: Optional[UserProfile]                  # Candidate profile
+    user_profile: UserProfile                            # Candidate profile
+    cv_text: Optional[str]                               # Editable CV content
+    is_cv_attached: bool                                 # CV attached in UI
     candidate_pool: List[Vacancy]                        # Found vacancies
     match_results: List[Dict]                            # Match analyses
     search_params: Dict                                  # Search configuration
     status: str                                          # Current workflow stage
     missing_info: List[str]                              # Missing field ids
     missing_questions: List[str]                         # Human questions
+    internal_feedback: Optional[Dict[str, Any]]          # Agent feedback
+    violations: Optional[List[Dict[str, Any]]]           # Validation violations
+    search_failed_reason: Optional[str]                  # Reason for 0 results
 ```
 
 ### UserProfile Structure
 
 ```python
 class UserProfile(BaseModel):
-    skills: List[str]                    # Technical skills
-    years_of_experience: Optional[int]   # Years of experience
-    salary_expectation: Optional[str]    # Optional salary string (e.g. "$150k")
-    location: Optional[str]              # Preferred location
-    remote_preference: Optional[str]     # "remote_only", "hybrid", "onsite"
-    visa_status: Optional[str]           # Visa/work authorization status
-    target_role: Optional[str]           # Target role/title
-    category: Optional[str]              # Job category
-    experience_level: Optional[str]      # "Junior", "Mid", "Senior"
-    industry: Optional[str]              # Industry (optional)
-    company_stage: Optional[str]         # Company stage preference
-    skip_questions: bool                 # Skip clarifying questions
+    summary: str                     # Profile summary
+    skills: List[str]                # Technical skills
+    experience_years: int            # Years of experience
+    location_pref: str               # Preferred location
+    salary_expectation: int          # Desired salary
+    salary_min: int                  # Minimum salary filter
+    company_stage_pref: List[str]    # Preferred stages
+    target_seniority: str            # Target seniority
+    industries: List[str]            # Preferred industries
+    skip_questions: bool             # Skip clarifying questions
 ```
 
 ## 🔄 Workflow Flow
 
 ### Complete Graph Flow
 
-```
-START
-  │
-  ▼
-┌─────────────────┐
-│  strategist     │  ← Entry point: Analyzes messages/CV, builds profile
-└────────┬────────┘
-         │
-         │ [Conditional: profile complete?]
-         │
-    ┌────┴────┐
-    │         │
-    ▼         ▼
-ready?    awaiting_info
-    │         │
-    │         └───▶ END (wait for user input)
-    │
-    ▼
-┌─────────────────┐
-│  job_scout      │  ← Generates search params, queries Pinecone
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  matchmaker     │  ← Parallel analysis of all vacancies
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  validator      │  ← Checks hard filters, adjusts if needed
-└────────┬────────┘
-         │
-         │ [Conditional: violations found?]
-         │
-    ┌────┴────┐
-    │         │
-    ▼         ▼
-needs_research  validation_complete
-    │         │
-    │         └───▶ final_validation ──▶ END
-    │
-    └───▶ job_scout (with adjusted params)
-         │
-         └───▶ [Loop back, max 2 iterations]
+```mermaid
+graph TD
+  START((User Input)) --> STRAT[Strategist Node]
+  STRAT -->|status=ready_for_search| JOB[Job Scout Node]
+  STRAT -->|status=awaiting_info| END((END))
+
+  JOB --> MATCH[Matchmaker Node]
+  MATCH --> VAL[Validator Node]
+
+  VAL -->|status=needs_research| JOB
+  VAL -->|status=validation_complete| FINAL[Final Validation Node]
+  FINAL --> END
 ```
 
 ## 🧩 Node Details
@@ -156,10 +127,9 @@ needs_research  validation_complete
 ```python
 # Checks if profile has:
 # - At least one skill (key tech stack)
-# - Role or category
-# - Experience level
-# - Location OR remote preference
-# - Industry is optional (does not block search)
+# - Experience years
+# - Location preference
+# - Salary expectation and industries are optional
 
 if profile_complete:
     status = "ready_for_search"
@@ -184,12 +154,10 @@ else:
 **Purpose**: Search Query Architect & Executor
 
 **What it does**:
-- Converts `UserProfile` into structured search parameters
-- Uses `JobScoutAgent` with `search_vacancies_tool` for hybrid search
-- Builds metadata filters for Pinecone
-- Validates search results quality (result count + similarity scores)
-- Adjusts criteria if results are too strict or low quality
-- Does NOT ask questions; only signals missing field ids
+- Builds a semantic query directly from `user_profile` (summary + top skills)
+- Calls `search_vacancies_tool` directly (no LLM tool planning in this node)
+- Builds metadata filters (location, industry, salary_min, company_stage)
+- Emits `internal_feedback` when it skips search or gets 0 results
 
 **Input**:
 - `user_profile`: Candidate profile
@@ -198,38 +166,29 @@ else:
 **Output**:
 - `search_params`: Complete search configuration
 - `candidate_pool`: List of `Vacancy` objects
-- `status`: `"search_complete"` or `"awaiting_info"` (if criteria too strict)
+- `status`: `"search_complete"`, `"no_results"`, or `"awaiting_info"`
 
 **Key Logic**:
 ```python
-# 1. Normalize user profile into a compact dict
-user_profile_dict = {
-    "skills": profile.skills,
-    "location": normalized_location,
-    "remote_preference": profile.remote_preference,
-    "experience_level": profile.experience_level,
-    "industry": profile.industry,
-    "company_stage": profile.company_stage,
-}
+# Build query from profile
+query_parts = []
+if user_profile.summary:
+    query_parts.append(user_profile.summary)
+if user_profile.skills:
+    query_parts.append(" ".join(user_profile.skills[:8]))
+query = " ".join(query_parts).strip()
 
-# 2. JobScoutAgent uses search_vacancies_tool to get results (via tool call)
-tool_result = search_vacancies_tool(...)
-vacancies = tool_result["results"]
-min_score = min([r.get("score", 0.0) for r in vacancies]) if vacancies else 0.0
-
-# 3. If results are too strict/empty or too low-quality, signal missing_info
-min_score_threshold = 0.3
-if len(vacancies) < 3 or (len(vacancies) > 0 and min_score < min_score_threshold):
-    status = "awaiting_info"
+tool_result = search_vacancies_tool.invoke({
+    "query": query,
+    "location": location,
+    "industry": industries,
+    "salary_min": salary_min,
+    "company_stage": company_stage,
+    "top_k": 50,
+})
 ```
 
-**Agent Used**: `JobScoutAgent` (from `agents/job_scout.py`)
-
-**RAG Tool**: Provides metadata schema information (Enum values for `RoleCategory`, `ExperienceLevel`, `CompanyStage`)
-
-**Special Handling**:
-- If called from `validator` with adjusted `search_params`, uses those instead of generating new ones
-- Only generates new `semantic_query` if missing
+**Tool Used**: `search_vacancies_tool` (direct call, no tool-planning LLM)
 
 ---
 
@@ -313,7 +272,6 @@ match_results = sorted(results, key=lambda x: x["overall_score"], reverse=True)
 **What it does**:
 - Audits `match_results` against user's **hard filters**
 - Checks for violations:
-  - Remote preference (if `remote_only`, all vacancies must be remote)
   - Location (if specified, vacancies must match)
   - Salary (if specified, vacancies must meet minimum)
 - Uses `TalentStrategistAgent` in audit mode to analyze violations
@@ -340,14 +298,10 @@ if candidate_pool_empty and filters_already_relaxed:
 
 # 2. Identify hard filters from user profile
 hard_filters = {}
-if profile.remote_preference == "remote_only":
-    hard_filters["remote_only"] = True
-if profile.location:
-    hard_filters["location"] = profile.location
-parsed_salary_expectation = parse_salary(profile.salary_expectation)
+if profile.location_pref:
+    hard_filters["location"] = profile.location_pref
 if profile.salary_expectation:
-    # parse "$150k" → 150000 when possible
-    hard_filters["min_salary"] = parsed_salary_expectation
+    hard_filters["min_salary"] = profile.salary_expectation
 
 # 3. Check each match result for violations
 violations = collect_violations(match_results, candidate_pool, hard_filters)
@@ -515,13 +469,13 @@ Let's trace a complete execution:
 1. **User sends**: "I'm a Python developer with 5 years experience, looking for remote jobs in Fintech"
 
 2. **Strategist Node**:
-   - Extracts: `skills=["Python"]`, `years_of_experience=5`, `remote_preference="remote_only"`
-   - Checks: Missing `salary_expectation` and `location` (but location not needed if remote_only)
-   - Status: `"ready_for_search"` (has skills + remote preference)
+   - Extracts: `skills=["Python"]`, `experience_years=5`, `location_pref="Remote"`, `industries=["Fintech"]`
+   - Checks: Missing `salary_expectation` (optional)
+   - Status: `"ready_for_search"` (has skills + experience + location preference)
 
 3. **Job Scout Node**:
-   - Generates: `semantic_query="Python Developer Fintech"`
-   - Filters: `{"remote_option": {"$eq": true}, "industry": {"$in": ["Fintech"]}}`
+   - Builds query from summary + skills (e.g., `"Python Developer Python"`)
+   - Filters: `{"location": "Remote", "industry": "Fintech"}`
    - Searches Pinecone → Finds 8 vacancies
    - Status: `"search_complete"`
 
@@ -532,7 +486,7 @@ Let's trace a complete execution:
    - Status: `"matching_complete"`
 
 5. **Validator Node**:
-   - Checks: All 8 vacancies have `remote_option=True` ✅
+   - Checks: All 8 vacancies match `location_pref="Remote"` ✅
    - Checks: All meet salary requirements (if specified) ✅
    - Status: `"validation_complete"`
 
@@ -540,10 +494,10 @@ Let's trace a complete execution:
    - Interrupt point for Studio inspection
    - Returns final results
 
-**If violations found** (e.g., one vacancy is not remote):
-- Validator adjusts `search_params`: adds stricter `remote_option` filter
+**If violations found** (e.g., one vacancy doesn't match location):
+- Validator adjusts `search_params`: tightens `location` filter
 - Loops back to Job Scout
-- Job Scout uses adjusted params → Finds 7 remote-only vacancies
+- Job Scout uses adjusted params → Finds 7 location-matching vacancies
 - Matchmaker re-analyzes → New results
 - Validator validates again → All pass ✅
 
