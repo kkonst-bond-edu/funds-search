@@ -1,15 +1,15 @@
-# Funds Search — Conversational Multi-Agent Job Matching
+# Funds Search — Conversational Multi‑Agent Job Matching
 
-A microservice system that helps a candidate find and explain best-fit roles (VC / startup jobs) using **LangGraph** orchestration, **BGE-M3 embeddings**, and a specialized **agent fleet**.
+Funds Search is a microservice system that matches candidates to startup/VC roles using **LangGraph orchestration**, **BGE‑M3 embeddings**, and a **specialized agent workflow**. The system combines **semantic retrieval** (vector search) with **hard filters**, and generates **explainable match results**.
 
-> **Repo Goal**: Keep the UI conversational and the backend deterministic/traceable (schemas + clear agent boundaries).
+---
 
-### Why this approach?
-Traditional job boards are keyword-based and overwhelming. This application acts as an **intelligent agentic layer** on top of vacancy data:
-1.  **Conversational**: Talk naturally ("I want a remote Python role in a Series A fintech") instead of fiddling with 20 filters.
-2.  **Context-Aware**: It understands *intent* and matches your *persona* (CV) to the job requirements, not just keywords.
-3.  **Transparent**: Every match comes with an AI-generated explanation of *why* it fits you.
-4.  **Autonomous**: Uses a **Talent Strategist** to remember your preferences and a **Job Scout** to intelligently query the database.
+## Goals
+
+- **Conversational UI**: users describe intent naturally, optionally attach a CV.
+- **Deterministic backend**: explicit state machine + schemas for traceability.
+- **Explainable matching**: each result includes an AI‑generated explanation.
+- **Scalable architecture**: services isolated for GPU/CPU scaling.
 
 ---
 
@@ -43,27 +43,7 @@ docker compose up -d --build
 
 ---
 
-## System Design: Conversational AI Agent Architecture
-
-### 🎯 Conversational Flow (Streaming)
-
-- The Web UI streams graph events from `POST /chat/stream` (SSE).
-- **Talent Strategist** is the only component that asks questions.
-- If required info is missing, the system returns `missing_info` (ids) and `missing_questions` (human text).
-- Users can skip clarifying questions to proceed directly to search.
-
-### ☁️ Cloud & Container Architecture
-
-The application is designed as a **cloud-native microservices architecture**, deployed via Docker containers. This ensures scalability, isolation, and consistent environments from development to production.
-
-*   **Containerized Services**: Each component (API, UI, Workers) runs in its own Docker container, allowing independent scaling. For example, the heavy `embedding-service` can run on a GPU node, while the `web-ui` runs on a lightweight instance.
-*   **Orchestration**: Docker Compose (local) or Kubernetes/Azure Container Apps (cloud) manages the lifecycle and networking of these containers.
-*   **Stateless Design**: The application logic is stateless. Persistent data lives in managed cloud services:
-    *   **Vector Database (Pinecone)**: Stores high-dimensional vector embeddings for fast semantic retrieval.
-    *   **LLM APIs (DeepSeek, OpenAI)**: Offloads heavy cognitive processing to specialized external providers.
-    *   **External Sources**: Fetches real-time data from vacancy boards.
-
-### 🏗️ High-Level Architecture
+## High‑Level Architecture
 
 ```mermaid
 graph TD
@@ -74,156 +54,134 @@ graph TD
     classDef database fill:#ffb347,stroke:#774400,stroke-width:2px;
     classDef infrastructure fill:#e1e1e1,stroke:#666,stroke-width:2px,stroke-dasharray: 5 5;
 
-    %% Client Side
     USER((👤 User)):::user -->|Chat / CV| UI[🖥️ Web UI: Streamlit]
 
     subgraph "☁️ Cloud Infrastructure (Docker / K8s)"
-        
         subgraph "🛠️ Orchestration Layer (FastAPI Gateway)"
-            UI <--> HUB{🧠 Orchestrator}
+            UI <--> API[FastAPI Gateway]
+            API --> ORCH{🧠 Orchestrator}
         end
 
-        %% Specialized Agents
         subgraph "🤖 AI Agent Fleet (LangGraph)"
-            TS[<b>Talent Strategist</b><br/><i>Memory & Context</i><br/>Configured LLM]:::agent
-            JS[<b>Job Scout</b><br/><i>Search Architect</i><br/>Configured LLM]:::agent
-            MM[<b>Matchmaker</b><br/><i>Analyst</i><br/>Configured LLM]:::agent
+            TS[<b>Talent Strategist</b><br/><i>Profile & Memory</i>]:::agent
+            JS[<b>Job Scout</b><br/><i>Search Executor</i>]:::agent
+            MM[<b>Matchmaker</b><br/><i>Analyst</i>]:::agent
             VLD[<b>Validator</b><br/><i>Hard Filters</i>]:::agent
-            VA[<b>Vacancy Analyst</b><br/><i>The Enricher</i><br/>Configured LLM]:::agent
+            VA[<b>Vacancy Analyst</b><br/><i>Enrichment</i>]:::agent
         end
 
-        %% Internal Services
         subgraph "⚙️ Microservices"
             EMB[🧮 Embedding Service<br/>BGE-M3 Model]:::service
             CV[📄 CV Processor<br/>Docling PDF/DOCX Parser]:::service
         end
     end
 
-    %% Data Storage
     subgraph "💾 Persistence Layer (Managed)"
         PC[(🌲 Pinecone Vector DB<br/><i>Vacancies Namespace</i>)]:::database
         PC2[(🌲 Pinecone Vector DB<br/><i>CVs Namespace</i>)]:::database
     end
 
-    %% Connections
-    HUB -->|1. Analyze Chat/CV| TS
-    TS -->|UserProfile| HUB
-    HUB -->|2. Search Params| JS
-    JS -->|Hybrid Query| HUB
-    HUB -->|3. Search DB| EMB
+    ORCH -->|1. Analyze Chat/CV| TS
+    TS -->|UserProfile| ORCH
+    ORCH -->|2. Search Request| JS
+    JS -->|search_vacancies_tool| ORCH
+
+    ORCH -->|Embedding Query| EMB
     EMB -->|Vectors| PC
+
     CV -->|Embeddings| EMB
     CV -->|Chunks| PC2
-    PC -->|Candidates| HUB
-    HUB -->|4. Analysis| MM
+
+    PC -->|Candidates| ORCH
+    ORCH -->|4. Analysis| MM
     MM -->|Match Results| VLD
     VLD -->|Validated Results| UI
 ```
 
-### 🧩 Parsing & Enrichment Pipeline
-
-Before any vacancy reaches the vector database, it undergoes a rigorous enrichment process by the **Vacancy Analyst** agent. This ensures that vague job descriptions are converted into structured, queryable data.
-
-#### 1. Classification (Taxonomy)
-The agent maps raw text to standardized taxonomies to enable precise filtering:
-*   **Category**: Mapped to standard functions (e.g., `Engineering`, `Product`, `G&A`).
-*   **Seniority**: Infers level from context (e.g., `Junior`, `Senior`, `Lead`, `C-Level`).
-*   **Remote Policy**: Differentiates between `Remote`, `Hybrid`, and `On-site` based on subtle cues.
-
-#### 2. Deep Enrichment (Extraction)
-The agent extracts structured entities using an **"Evidence Map"** (quoting the source text) to ensure accuracy:
-*   **Role Details**: Tech stack (e.g., `Python`, `Kubernetes`), required skills, and "nice-to-haves".
-*   **Company Signals**: Domain tags (e.g., `Fintech`, `Generative AI`), product type (`SaaS`, `Marketplace`), and culture signals.
-*   **Offer & Constraints**: Extracts salary ranges, equity options (`options`, `RSUs`), visa sponsorship availability, and timezone constraints.
-
-#### 3. Storage
-This structured metadata is stored alongside the vector embeddings in **Pinecone**. This allows the **Job Scout** to perform hybrid searches, combining semantic understanding ("find me a challenging role") with hard filters ("Must have Visa Support" and "Equity").
-
 ---
 
-## 🤖 The Agent Fleet
-
-We avoid a single "all-knowing bot". Each agent is specialized, easier to debug, and uses the most appropriate model for its task.
-
-| Agent | Role | Model | Responsibility |
-|:------|:-----|:------|:---------------|
-| **Talent Strategist 🕵️‍♂️** | Memory & Profiler | **Configured LLM** | "The Brain". Maintains the **User Profile** across the conversation. Incrementally updates skills, preferences (remote, salary, stage), and context without forgetting previous details. |
-| **Job Scout 🛰️** | Search Architect | **Configured LLM** | "The Translator". Converts the human-readable User Profile into a **Hybrid Search Query** (Semantic Vector + Metadata Filters) for Pinecone. It understands implied constraints (e.g., "stability" -> "Series B+"). |
-| **Matchmaker 🤝** | Analyst | **Configured LLM** | "The Critic". Reads candidate profiles vs. retrieved vacancies line-by-line. Assigns a relevance score (0–10) and writes a "Why this fits" explanation. |
-| **Vacancy Analyst 🧠** | Enrichment | **Configured LLM** | Classifies raw job post text into standardized taxonomies (Category, Seniority) and extracts structured entities (Benefits, Tech Stack, Culture) before indexing. |
-
-### Agent Workflow
+## Core Runtime Flow (LangGraph)
 
 ```mermaid
-graph LR
-    %% Styles
-    classDef start fill:#bbf,stroke:#333,stroke-width:2px;
-    classDef process fill:#fff,stroke:#333,stroke-width:1px;
-    classDef agent fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
-    classDef endnode fill:#bbf,stroke:#333,stroke-width:2px;
+graph TD
+  START((User Input)) --> STRAT[Strategist Node]
+  STRAT -->|status=ready_for_search| JOB[Job Scout Node]
+  STRAT -->|status=awaiting_info| END((END))
 
-    %% Nodes
-    START((User Input)):::start
-    
-    subgraph "Phase 1: Understanding & Memory"
-        TS[👤 Talent Strategist<br/>Update Persona]:::agent
-    end
+  JOB --> MATCH[Matchmaker Node]
+  MATCH --> VAL[Validator Node]
 
-    subgraph "Phase 2: Discovery"
-        JS[🛰️ Job Scout<br/>Generate Query]:::agent
-        SV[🔍 Search Node<br/>Hybrid Retrieval]:::process
-    end
-
-    subgraph "Phase 3: Analysis"
-        MM[🤝 Matchmaker<br/>Rerank & Explain]:::agent
-        VA[✅ Validator<br/>Hard Filters]:::agent
-    end
-
-    subgraph "Phase 4: Finalization"
-        FV[📌 Final Validation<br/>Summary]:::process
-    end
-
-    END((Response)):::endnode
-
-    %% Flow
-    START -->|Message + History| TS
-    TS -->|Updated Persona| JS
-    JS -->|Semantic Query + Filters| SV
-    
-    SV -->|Top Candidates| MM
-    TS -.->|UserProfile| MM
-    MM -->|Match Results| VA
-    VA -->|Validated Results| FV
-    FV --> END
+  VAL -->|status=needs_research| JOB
+  VAL -->|status=validation_complete| FINAL[Final Validation Node]
+  FINAL --> END
 ```
-
-### CV Optional State
-
-The system works with or without an uploaded CV:
-
-- **Conversation-only profile**: The strategist builds a `UserProfile` from chat messages (skills, role, location, etc.)
-- **CV enrichment**: Uploading a CV improves extraction accuracy and evidence strength
-- **Search still runs**: Results are returned based on the conversation profile even without a CV
-
-> Provider choice is configuration. The docs describe intent; your `.env` decides which providers are enabled.
 
 ---
 
-## Repo Map (high level)
+## Agent System (core behavior)
 
-- `apps/api/` — FastAPI gateway (chat/search endpoints, diagnostics)
-- `apps/orchestrator/` — LangGraph orchestration (agent flow + state)
-- `apps/web_ui/` — Streamlit UI (chat + system diagnostics)
-- `services/embedding-service/` — BGE-M3 embeddings (HTTP service)
-- `services/cv-processor/` — PDF parsing + text extraction (HTTP service)
-- `shared/` — shared schemas, clients, Pinecone helpers
+| Agent | Role | What it does in the current system |
+|:------|:-----|:------------------------------------|
+| **Talent Strategist** | Profile & memory | Builds/updates `UserProfile` from chat and CV. Only agent that asks questions. |
+| **Job Scout** | Search executor | Builds the query from `UserProfile` (summary + top skills) and calls `search_vacancies_tool` directly. |
+| **Matchmaker** | Scoring & explanation | LLM scores each vacancy (0–10) and explains why it fits. |
+| **Validator** | Hard‑filter audit | Checks location/salary constraints and can request re‑search. |
+| **Vacancy Analyst** | Ingestion enrichment | Offline agent used during ingestion to classify and extract structured signals before indexing. |
+
+---
+
+## Parsing & Enrichment Pipeline (ingestion)
+
+Before vacancies are indexed, the **Vacancy Analyst** extracts structured signals to improve search precision.
+
+**1. Classification (taxonomy)**
+- Category mapping (e.g., Engineering, Product)
+- Seniority inference (Junior → Lead)
+- Remote policy (Remote / Hybrid / On‑site)
+
+**2. Deep extraction**
+- Tech stack, required skills, nice‑to‑haves
+- Domain tags (Fintech, AI, etc.)
+- Culture/benefits/constraints (salary, visa, timezone)
+
+**3. Storage**
+- Structured metadata stored alongside embeddings in Pinecone
+- Enables hybrid search: semantic + hard filters
+
+---
+
+## Services & Responsibilities
+
+### Apps
+- `apps/api/` — FastAPI gateway (chat/search endpoints, SSE `/chat/stream`)
+- `apps/orchestrator/` — LangGraph workflow + agents
+- `apps/web_ui/` — Streamlit UI
+
+### Services
+- `services/embedding-service/` — BGE‑M3 embeddings (HTTP service)
+- `services/cv-processor/` — CV parsing + embedding ingestion
+
+### Shared
+- `shared/` — shared schemas + Pinecone client
+
+---
+
+## Project Navigation (READMEs)
+
+Key docs are intentionally distributed:
+
+- Orchestrator flow + state: `apps/orchestrator/README.md`
+- API endpoints + streaming: `apps/api/README.md`
+- UI behavior + tabs: `apps/web_ui/README.md`
+- Embedding service: `services/embedding-service/README.md`
+- CV processor: `services/cv-processor/README.md`
+- Shared schemas: `shared/README.md`
 
 ---
 
 ## Docs (Deep Dives)
-
-- Architecture: `docs/architecture.md`
-- API reference: `docs/api.md`
-- Deployment: `docs/deployment.md`
-- Schemas: `docs/schemas.md`
-- Troubleshooting: `docs/troubleshooting.md`
+- `docs/architecture.md`
+- `docs/api.md`
+- `docs/deployment.md`
+- `docs/schemas.md`
+- `docs/troubleshooting.md`
