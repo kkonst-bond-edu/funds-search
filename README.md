@@ -1,6 +1,6 @@
 # Funds Search — Conversational Multi‑Agent Job Matching
 
-Funds Search is a microservice system that matches candidates to startup/VC roles using **LangGraph orchestration**, **BGE‑M3 embeddings**, and a **specialized agent workflow**. The system combines **semantic retrieval** (vector search) with **hard filters**, and generates **explainable match results**.
+Funds Search is a microservice system that matches candidates to startup/VC roles using a **multi‑agent AI workflow**. Each agent has a clear responsibility: the **Talent Strategist** builds a user profile from chat/CV, the **Job Scout** runs vector search with filters, the **Matchmaker** scores and explains fit, and the **Validator** enforces hard constraints. Orchestration is done with **LangGraph**, retrieval uses **BGE‑M3 embeddings + Pinecone**, and every result includes an explanation.
 
 ---
 
