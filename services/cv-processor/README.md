@@ -12,6 +12,8 @@ The CV Processor is part of the funds-search RAG (Retrieval-Augmented Generation
 - **Text Chunking**: Splits documents into semantic chunks (1000 characters with 800 character overlap)
 - **Embedding Generation**: Calls the embedding-service to generate 1024-dimensional vectors using BGE-M3 model
 - **Vector Storage**: Stores processed resumes in Pinecone vector database with metadata
+- **Persona Persistence**: Stores raw CV persona data in SQLite for cross-session restore
+- **Targeted Deletion**: Deletes CV vectors by user_id without affecting other data
 - **Error Handling**: Comprehensive error handling for service failures, invalid files, and processing errors
 
 ## Architecture
@@ -51,6 +53,51 @@ curl -X POST "http://localhost:8002/process-cv?user_id=user123" \
 - `400`: Invalid file format, empty file, or missing user_id
 - `503`: Embedding service unavailable
 - `500`: Processing error or Pinecone connection error
+
+### `DELETE /delete-cv`
+
+Delete all CV vectors for a user_id and mark the persona as deleted.
+
+**Request:**
+- `user_id` (query parameter): User identifier
+
+**Example using curl:**
+```bash
+curl -X DELETE "http://localhost:8002/delete-cv?user_id=user123"
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "user_id": "user123"
+}
+```
+
+### `GET /cv/persona`
+
+Fetch the persisted persona for a user_id (if not deleted).
+
+**Request:**
+- `user_id` (query parameter): User identifier
+
+**Example using curl:**
+```bash
+curl "http://localhost:8002/cv/persona?user_id=user123"
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "persona": {
+    "user_id": "user123",
+    "resume_id": "uuid-here",
+    "cv_text": "...",
+    "is_deleted": false
+  }
+}
+```
 
 ## Configuration
 

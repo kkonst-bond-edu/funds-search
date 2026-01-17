@@ -277,6 +277,8 @@ def make_request_with_retry(
                     response = client.get(url, **kwargs)
                 elif method.upper() == "POST":
                     response = client.post(url, **kwargs)
+                elif method.upper() == "DELETE":
+                    response = client.delete(url, **kwargs)
                 else:
                     raise ValueError(f"Unsupported HTTP method: {method}")
 
@@ -344,6 +346,46 @@ def process_cv_upload(file, user_id: str) -> dict:
                 f"Error: {error_msg}"
             )
         raise Exception(f"Error processing CV: {error_msg}")
+
+
+def fetch_cv_persona(user_id: str) -> dict:
+    """
+    Fetch persisted CV persona for a user_id.
+    """
+    try:
+        response = make_request_with_retry(
+            "GET",
+            f"{CV_PROCESSOR_URL}/cv/persona",
+            params={"user_id": user_id},
+        )
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error fetching CV persona: {e.response.status_code} - {e.response.text}")
+        raise Exception(f"Failed to fetch CV persona: {e.response.status_code} - {e.response.text}")
+    except Exception as e:
+        logger.error(f"Error fetching CV persona: {str(e)}")
+        raise
+
+
+def delete_cv(user_id: str) -> dict:
+    """
+    Delete CV for a user_id (Pinecone + persistent record).
+    """
+    try:
+        response = make_request_with_retry(
+            "DELETE",
+            f"{CV_PROCESSOR_URL}/delete-cv",
+            params={"user_id": user_id},
+        )
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error deleting CV: {e.response.status_code} - {e.response.text}")
+        raise Exception(f"Failed to delete CV: {e.response.status_code} - {e.response.text}")
+    except Exception as e:
+        logger.error(f"Error deleting CV: {str(e)}")
+        raise
 
 
 def process_vacancy(vacancy_text: str, vacancy_id: Optional[str] = None) -> dict:
@@ -1066,9 +1108,25 @@ if "chat_messages" not in st.session_state:
 if "persona" not in st.session_state:
     st.session_state.persona = None
 
+# Track whether CV is attached for the current session
+if "is_cv_attached" not in st.session_state:
+    st.session_state.is_cv_attached = False
+
 # Initialize user_profile if not exists (graph-driven flow)
 if "user_profile" not in st.session_state:
     st.session_state.user_profile = None
+
+if "current_user_id" not in st.session_state:
+    st.session_state.current_user_id = ""
+
+if "candidate_id_upload" not in st.session_state:
+    st.session_state.candidate_id_upload = st.session_state.current_user_id
+
+if "candidate_id_match" not in st.session_state:
+    st.session_state.candidate_id_match = st.session_state.current_user_id
+
+if "loaded_cv_user_id" not in st.session_state:
+    st.session_state.loaded_cv_user_id = None
 
 if "skip_request" not in st.session_state:
     st.session_state.skip_request = None
@@ -1194,6 +1252,13 @@ with tab_chat:
     st.header("💬 AI Recruiter")
     st.markdown("Chat with the AI recruiter to find your ideal role at startup companies.")
 
+    current_user_id = st.session_state.get("current_user_id") or "—"
+    st.caption(f"User ID: {current_user_id}")
+    cv_attached = "✅" if st.session_state.get("is_cv_attached") else "❌"
+    persona_present = "✅" if st.session_state.get("persona") else "❌"
+    profile_present = "✅" if st.session_state.get("user_profile") else "❌"
+    st.caption(f"CV Attached: {cv_attached} | Persona: {persona_present} | Profile: {profile_present}")
+
     # Show persona notification if active
     if st.session_state.get("persona"):
         st.info("🎯 AI is using your CV profile for personalized search.")
@@ -1204,10 +1269,10 @@ with tab_chat:
             st.write(message["content"])
             missing_questions = message.get("missing_questions", [])
             if message["role"] == "assistant" and missing_questions:
-                st.markdown("**Нужно уточнить:**")
+                st.markdown("**Need clarification:**")
                 for question in missing_questions:
                     st.write(f"- {question}")
-                if st.button("Пропустить вопросы", key=f"skip_questions_{idx}"):
+                if st.button("Skip questions", key=f"skip_questions_{idx}"):
                     st.session_state.skip_request = {"message": "skip"}
                     st.rerun()
 
@@ -1276,7 +1341,7 @@ with tab_chat:
 
     if skip_payload:
         incoming_message = "skip"
-        display_message = "Пропустить вопросы"
+        display_message = "Skip questions"
         skip_questions = True
         st.session_state.skip_request = None
     elif user_input:
@@ -1321,8 +1386,9 @@ with tab_chat:
                     request_payload["skip_questions"] = True
                 if st.session_state.get("user_profile"):
                     request_payload["user_profile"] = st.session_state.user_profile
-                elif persona:
+                if persona:
                     request_payload["persona"] = persona
+                request_payload["is_cv_attached"] = bool(st.session_state.get("is_cv_attached"))
 
                 with st.expander("🔍 Debug: Request Payload", expanded=False):
                     debug_payload = {
@@ -1330,6 +1396,7 @@ with tab_chat:
                         "skip_questions": skip_questions,
                         "has_persona": persona is not None,
                         "has_user_profile": st.session_state.get("user_profile") is not None,
+                        "is_cv_attached": bool(st.session_state.get("is_cv_attached")),
                         "persona_keys": list(persona.keys()) if isinstance(persona, dict) else None,
                         "history_length": len(history)
                     }
@@ -1672,9 +1739,37 @@ with tab_cv:
 
         user_id = st.text_input(
             "Candidate ID (User ID)",
-            value="",
+            key="candidate_id_upload",
             help="Enter a unique identifier for the candidate (e.g., email, username, or UUID)",
         )
+        if user_id:
+            st.session_state.current_user_id = user_id
+
+        if user_id and st.session_state.loaded_cv_user_id != user_id:
+            try:
+                result = fetch_cv_persona(user_id)
+                persona = result.get("persona")
+                st.session_state.persona = persona
+                st.session_state.is_cv_attached = bool(persona and persona.get("cv_text"))
+            except Exception as e:
+                st.warning(f"⚠️ Could not restore CV persona: {str(e)[:80]}")
+                st.session_state.persona = None
+                st.session_state.is_cv_attached = False
+            finally:
+                st.session_state.loaded_cv_user_id = user_id
+                st.rerun()
+
+        # Status indicator for CV context usage (after any restore)
+        cv_attached = bool(st.session_state.get("is_cv_attached"))
+        persona_present = bool(st.session_state.get("persona"))
+        profile_present = bool(st.session_state.get("user_profile"))
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            st.metric("CV Attached", "✅" if cv_attached else "❌")
+        with col_b:
+            st.metric("Persona Loaded", "✅" if persona_present else "❌")
+        with col_c:
+            st.metric("User Profile", "✅" if profile_present else "❌")
 
         uploaded_file = st.file_uploader(
             "Choose a PDF file", type=["pdf"], help="Upload a PDF resume file"
@@ -1704,6 +1799,8 @@ with tab_cv:
                     persona = result.get("persona")
                     if persona:
                         st.session_state["persona"] = persona
+                        st.session_state["is_cv_attached"] = True
+                        st.session_state["loaded_cv_user_id"] = user_id
                         st.success("🎯 CV profile saved! AI will use it for personalized search.")
                     else:
                         # Fallback: create basic persona from available data
@@ -1712,6 +1809,8 @@ with tab_cv:
                             "user_id": user_id,
                             "resume_id": result.get('resume_id')
                         }
+                        st.session_state["is_cv_attached"] = False
+                        st.session_state["loaded_cv_user_id"] = user_id
                         st.warning("⚠️ Persona not found in response, using basic structure.")
                 
                     # Debug: Show persona in state
@@ -1720,6 +1819,20 @@ with tab_cv:
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
                     logger.error(f"CV processing error: {str(e)}")
+
+        if st.button("🗑️ Delete CV", use_container_width=True):
+            if not user_id:
+                st.error("Please enter a Candidate ID")
+            else:
+                try:
+                    delete_cv(user_id)
+                    st.session_state.persona = None
+                    st.session_state.is_cv_attached = False
+                    st.session_state.loaded_cv_user_id = user_id
+                    st.session_state.user_profile = None
+                    st.success("✅ CV removed. Context preserved.")
+                except Exception as e:
+                    st.error(f"❌ Failed to delete CV: {str(e)}")
 
     # Process Vacancy
     elif cv_mode == "💼 Process Vacancy":
@@ -1791,9 +1904,11 @@ with tab_cv:
         with col1:
             candidate_id = st.text_input(
                 "Candidate ID",
-                value="",
+                key="candidate_id_match",
                 help="Enter the candidate ID (user_id) that was used when uploading the CV",
             )
+            if candidate_id:
+                st.session_state.current_user_id = candidate_id
 
         with col2:
             top_k = st.number_input(

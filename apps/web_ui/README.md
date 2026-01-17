@@ -15,6 +15,7 @@ The UI is organized into **5 main tabs**, each serving a distinct purpose:
 - **Features**:
   - **Persona Integration**: Uses CV persona when available; otherwise builds profile from chat
   - **Incremental Memory**: Remembers preferences (e.g., "remote only") stated in previous messages
+  - **Context Status**: Shows User ID + CV/Persona/Profile status indicators
   - **Technical Logs**: Expandable debug section with request payload and strategy info
   - **Search Stats**: Displays the number of database matches and filtering results when available
   - **Vacancy Cards**: Rich, compact display of job matches with AI reasoning
@@ -43,6 +44,7 @@ The UI is organized into **5 main tabs**, each serving a distinct purpose:
 - **Features**:
   - PDF file uploader
   - Progress indicators for processing
+  - Status indicators for CV attachment, persona, and user profile
   - Match results with AI reasoning
   - Summary statistics
 
@@ -87,6 +89,8 @@ The sidebar is **clean and minimal**, containing only:
 
 - `chat_messages`: Stores chat history for AI Recruiter tab
 - `persona`: Stores the CV-derived user persona (if CV was uploaded)
+- `is_cv_attached`: Indicates whether a CV is active for the current user
+- `loaded_cv_user_id`: Tracks which user_id is currently loaded for CV restore
 - `user_profile`: Stores graph-managed user profile derived from chat
 - `skip_request`: Triggers a skip action when user clicks "Skip questions"
 - `interview_complete`: Tracks interview completion status
