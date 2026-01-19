@@ -57,6 +57,8 @@ def upload_html_to_azure_blob(
         logger.warning("azure-storage-blob package not installed. Install with: pip install azure-storage-blob")
         return None
     
+    blob_service_client = None
+
     # Priority 1: Use Connection String if available (backward compatibility)
     if connection_string:
         try:
@@ -64,10 +66,9 @@ def upload_html_to_azure_blob(
             logger.debug("Using Connection String authentication for Azure Blob Storage")
         except Exception as e:
             logger.error(f"Failed to initialize BlobServiceClient with connection string: {str(e)}")
-            return None
-    
+
     # Priority 2: Use Service Principal via DefaultAzureCredential
-    elif account_name:
+    if blob_service_client is None and account_name:
         if DefaultAzureCredential is None:
             logger.warning(
                 "azure-identity package not installed. Install with: pip install azure-identity. "
@@ -95,7 +96,7 @@ def upload_html_to_azure_blob(
             return None
     
     # No authentication method available
-    else:
+    if blob_service_client is None:
         logger.warning(
             "Azure Blob Storage not configured. Set either:\n"
             "  - AZURE_STORAGE_CONNECTION_STRING (Connection String method), or\n"

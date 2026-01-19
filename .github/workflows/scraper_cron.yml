@@ -26,6 +26,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements/scraper.txt
           playwright install --with-deps chromium # Нужно для работы BrowserManager
+      
+      - name: Warm up embedding service
+        run: |
+          for i in {1..30}; do
+            echo "Warming embedding service... (attempt $i/30)"
+            if curl -fsS "${{ secrets.EMBEDDING_SERVICE_URL }}/health" | grep -q '"model_loaded": true'; then
+              echo "Embedding service is ready"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Embedding service did not become ready in time"
+          exit 1
 
       - name: Run Scraper
         continue-on-error: false
@@ -36,6 +49,7 @@ jobs:
           PINECONE_ENVIRONMENT: ${{ secrets.PINECONE_ENVIRONMENT }}
           PINECONE_INDEX_NAME: ${{ secrets.PINECONE_INDEX_NAME }}
           AZURE_EMBEDDING_ENDPOINT: ${{ secrets.AZURE_EMBEDDING_ENDPOINT }}
+          EMBEDDING_SERVICE_URL: ${{ secrets.EMBEDDING_SERVICE_URL }}
           
           # Azure Blob Storage для хранения HTML (Service Principal метод)
           AZURE_STORAGE_ACCOUNT_NAME: ${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }}
